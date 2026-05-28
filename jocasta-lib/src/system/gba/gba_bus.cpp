@@ -566,8 +566,8 @@ void core::eval_irqs()
 
 void core::enable_prefetch()
 {
-    u32 page = cpu.regs.R[15] >> 28;
-    if ((page < 8) || (page >= 0xE)) { // Prefetch is enabled but not great...
+    u32 page = cpu.regs.R[15] >> 24;  // was >> 28: gave page=0 for all ROM addresses
+    if ((page < 8) || (page >= 0xE)) { // PC not in ROM — prefetch can't run yet
         cart.prefetch.last_access = 0xFFFFFFFFFFFFFFFF;
     }
     else {
@@ -575,7 +575,7 @@ void core::enable_prefetch()
     }
     cart.prefetch.cycles_banked = 0;
     cart.prefetch.next_addr = cpu.regs.R[15];
-    cart.prefetch.duty_cycle = waitstates.timing16[0][page];
+    cart.prefetch.duty_cycle = waitstates.timing16[1][page];  // was [0]: must use S-cycle, not N-cycle
 }
 
 static constexpr u8 hipri[16] = {

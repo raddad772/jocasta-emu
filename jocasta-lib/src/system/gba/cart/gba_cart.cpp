@@ -104,8 +104,12 @@ u32 core::read(GBA::core *gba, u32 addr, u8 access) {
     // If we are at the next prefetch addr, and it's code...
     if (th->prefetch.last_access != 0xFFFFFFFFFFFFFFFF)
         th->prefetch.cycles_banked += (tt - static_cast<i64>(th->prefetch.last_access));
-    if (th->prefetch.cycles_banked > (this_cycles * 8)) { // We can only get ahead 8 times
-        th->prefetch.cycles_banked = this_cycles * 8;
+    // Cap at 8 halfwords (16 bytes) regardless of access size. For ARM sz=4,
+    // this_cycles = timing32 = 2*timing16, so *8 would give 16 ARM words — too much.
+    // Always use timing16[1] * 8 so the limit is 8 halfwords for both modes.
+    i64 max_banked = static_cast<i64>(gba->waitstates.timing16[1][page]) * 8;
+    if (th->prefetch.cycles_banked > max_banked) {
+        th->prefetch.cycles_banked = max_banked;
     }
 
     if (addr == th->prefetch.next_addr && (access & ARM32P_code)) {
@@ -147,9 +151,10 @@ u32 core::read(GBA::core *gba, u32 addr, u8 access) {
         current_fetch_addr += (fetch_cycles * sz);
         if (addr == current_fetch_addr && (access & ARM32P_code) && (fetch_cycles > 0)) {
             //printf("\nI HIT THE CASE...");
-            // TODO: reaosn this out with nonsequential timing
-            u32 cycles_left_to_fetch = th->prefetch.cycles_banked % duty_cycle;
-            outcycles += cycles_left_to_fetch;
+            // cycles_banked % duty_cycle is elapsed time within the current fetch.
+            // We need remaining = duty_cycle - elapsed, not elapsed itself.
+            u32 cycles_elapsed = th->prefetch.cycles_banked % duty_cycle;
+            outcycles += (duty_cycle - cycles_elapsed);
             th->prefetch.cycles_banked = 0;
         }
         else { // Abort the prefetcher
@@ -194,6 +199,10 @@ u32 core::read_sram(GBA::core *gba, u32 addr, u8 access)
     if constexpr (sz == 4) {
         v *= 0x1010101;
     }
+    // SRAM/FLASH access stops the prefetch buffer (same as any non-ROM access).
+    gba->waitstates.current_transaction += th->prefetch_stop();
+    th->prefetch.cycles_banked = 0;
+    th->prefetch.last_access = 0xFFFFFFFFFFFFFFFFULL;
     gba->waitstates.current_transaction += gba->waitstates.sram;
     return v;
 }
@@ -239,6 +248,10 @@ void core::write_sram(GBA::core *gba, u32 addr, u8 access, u32 val)
     }
     val &= 0xFF;
     static_cast<u8 *>(th->RAM.store->data)[addr & th->RAM.mask] = val;
+    // SRAM/FLASH write also stops the prefetch buffer.
+    gba->waitstates.current_transaction += th->prefetch_stop();
+    th->prefetch.cycles_banked = 0;
+    th->prefetch.last_access = 0xFFFFFFFFFFFFFFFFULL;
     gba->waitstates.current_transaction += gba->waitstates.sram;
     th->RAM.store->dirty = true;
 }
