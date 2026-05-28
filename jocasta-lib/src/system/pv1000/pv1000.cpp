@@ -216,12 +216,10 @@ void core::reset() {
 
 u32 core::finish_frame() {
     if (::dbg.do_debug) {
-        dbg.waveforms.main.get().setup(static_cast<float>(MASTER_CYCLES_PER_FRAME));
-        vdp.psg_ext_enable = dbg.waveforms.main.get().ch_output_enabled;
-        for (u32 i = 0; i < 3; i++) {
-            dbg.waveforms.chan[i].get().setup(static_cast<float>(MASTER_CYCLES_PER_FRAME));
-            vdp.sq[i].ext_enable = dbg.waveforms.chan[i].get().ch_output_enabled;
-        }
+        const float cpf = static_cast<float>(MASTER_CYCLES_PER_FRAME);
+        dbg_wf_setup(dbg.waveforms.main.get(), cpf, vdp.psg_ext_enable);
+        for (u32 i = 0; i < 3; i++)
+            dbg_wf_setup(dbg.waveforms.chan[i].get(), cpf, vdp.sq[i].ext_enable);
     }
     u64 old_frame = vdp.master_frame_count;
     while (old_frame == vdp.master_frame_count) {

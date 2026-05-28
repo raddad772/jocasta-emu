@@ -261,16 +261,10 @@ void NES::core::sample_audio()
 u32 NES::core::finish_frame()
 {
     if (::dbg.do_debug && dbg.waveforms.main.vec != nullptr) {
-        dbg.waveforms.main.get().setup(APU_CYCLES_PER_FRAME);
-        apu.ext_enable = dbg.waveforms.main.get().ch_output_enabled;
-        for (u32 i = 0; i < 4; i++) {
-            debug_waveform &wf = dbg.waveforms.chan[i].get();
-            wf.setup(APU_CYCLES_PER_FRAME);
-            apu.channels[i].ext_enable = wf.ch_output_enabled;
-        }
-        debug_waveform &wf_dmc = dbg.waveforms.chan[4].get();
-        wf_dmc.setup(APU_CYCLES_PER_FRAME);
-        apu.dmc.ext_enable = wf_dmc.ch_output_enabled;
+        dbg_wf_setup(dbg.waveforms.main.get(), APU_CYCLES_PER_FRAME, apu.ext_enable);
+        for (u32 i = 0; i < 4; i++)
+            dbg_wf_setup(dbg.waveforms.chan[i].get(), APU_CYCLES_PER_FRAME, apu.channels[i].ext_enable);
+        dbg_wf_setup(dbg.waveforms.chan[4].get(), APU_CYCLES_PER_FRAME, apu.dmc.ext_enable);
     }
 
     if (fake_PRG_RAM.ptr == nullptr && SRAM)

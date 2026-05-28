@@ -66,33 +66,12 @@ static inline float i16_to_float(i16 val)
     return static_cast<float>(val) / 32768.0f;
 }
 
-static inline bool debug_wf_requested(debug::waveform2::wf *wf)
-{
-    return wf && (wf->samples_requested > 0);
-}
-
-static bool sample_audio_debug_mono(debug::waveform2::wf *wf, float sample)
-{
-    if (!wf || wf->user.buf_pos >= wf->samples_requested) return false;
-    static_cast<float *>(wf->buf[wf->rendering_buf].ptr)[wf->user.buf_pos++] = sample;
-    return wf->user.buf_pos < wf->samples_requested;
-}
-
-static bool sample_audio_debug_stereo(debug::waveform2::wf *wf, float left, float right)
-{
-    if (!wf || (wf->user.buf_pos + 1) >= (wf->samples_requested << 1)) return false;
-    float *fb = static_cast<float *>(wf->buf[wf->rendering_buf].ptr);
-    fb[wf->user.buf_pos++] = left;
-    fb[wf->user.buf_pos++] = right;
-    return wf->user.buf_pos < (wf->samples_requested << 1);
-}
-
 static void sample_audio_debug_max(void *ptr, u64 key, u64 clock_val, u32 jitter)
 {
     auto *th = static_cast<core *>(ptr);
     if (key != th->audio.debug_generation) return;
     auto *dw = th->dbg.waveforms2.main_cache;
-    if (!sample_audio_debug_stereo(dw, i16_to_float(static_cast<i16>(th->ym2610.mix.left_output)), i16_to_float(static_cast<i16>(th->ym2610.mix.right_output)))) {
+    if (!debug::waveform2::wf_push_stereo(dw, i16_to_float(static_cast<i16>(th->ym2610.mix.left_output)), i16_to_float(static_cast<i16>(th->ym2610.mix.right_output)))) {
         return;
     }
     th->audio.next_sample_cycle_max += th->audio.master_cycles_per_max_sample;
@@ -107,7 +86,7 @@ static void sample_audio_debug_min(void *ptr, u64 key, u64 clock_val, u32 jitter
 
     for (u32 i = 0; i < YM2610::core::NUM_FM_CHANNELS; i++) {
         auto *dc = th->dbg.waveforms2.fm.chan_cache[i];
-        if (sample_audio_debug_mono(dc, i16_to_float(static_cast<i16>(th->ym2610.sample_channel(i) << 2)))) {
+        if (debug::waveform2::wf_push_mono(dc, i16_to_float(static_cast<i16>(th->ym2610.sample_channel(i) << 2)))) {
             any_remaining = true;
         }
     }
@@ -117,19 +96,19 @@ static void sample_audio_debug_min(void *ptr, u64 key, u64 clock_val, u32 jitter
             i32 acc = th->ym2610.adpcm_a.ch[i].accumulator;
             if (acc & 0x800) acc |= ~0xFFF;
             float sample = acc == 0 ? 0.0f : static_cast<float>(acc) / 2048.0f;
-            if (sample_audio_debug_mono(dc, sample)) {
+            if (debug::waveform2::wf_push_mono(dc, sample)) {
                 any_remaining = true;
             }
         }
     }
     auto *dc = th->dbg.waveforms2.adpcm_b.chan_cache[0];
-    if (sample_audio_debug_mono(dc, i16_to_float(static_cast<i16>(th->ym2610.adpcm_b.accumulator)))) {
+    if (debug::waveform2::wf_push_mono(dc, i16_to_float(static_cast<i16>(th->ym2610.adpcm_b.accumulator)))) {
         any_remaining = true;
     }
     for (u32 i = 0; i < 3; i++) {
         dc = th->dbg.waveforms2.ssg.chan_cache[i];
         i32 sample = th->ym2610.ssg.sample_channel(static_cast<int>(i));
-        if (sample_audio_debug_mono(dc, static_cast<float>(sample) / 8192.0f)) {
+        if (debug::waveform2::wf_push_mono(dc, static_cast<float>(sample) / 8192.0f)) {
             any_remaining = true;
         }
     }
@@ -307,12 +286,12 @@ u32 core::finish_frame()
         audio.nosolo = !any_solo;
 
         auto channel_enabled = [this](debug::waveform2::wf *wf) {
-            return audio.nosolo || (wf && wf->ch_output_solo);
+            return debug::waveform2::wf_channel_enabled(audio.nosolo, wf);
         };
         auto setup_min_wf = [this, &min_samples_requested](debug::waveform2::wf *wf) {
             if (!wf) return;
             wf->setup(clock.cycles_per_frame);
-            if (debug_wf_requested(wf) && (wf->samples_requested > min_samples_requested))
+            if (debug::waveform2::wf_requested(wf) && (wf->samples_requested > min_samples_requested))
                 min_samples_requested = wf->samples_requested;
         };
 

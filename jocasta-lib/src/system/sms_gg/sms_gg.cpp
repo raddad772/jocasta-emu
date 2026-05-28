@@ -256,17 +256,13 @@ void SMSGG::core::killall()
 u32 SMSGG::core::finish_frame()
 {
     if (::dbg.do_debug && dbg.waveforms.main.vec != nullptr) {
-        auto *wf = &dbg.waveforms.main.get();
-        wf->setup(MASTER_CYCLES_PER_FRAME);
-        sn76489.ext_enable = wf->ch_output_enabled;
-        if (wf->clock_divider == 0) wf->clock_divider = wf->default_clock_divider;
-        clock.apu_divisor = wf->clock_divider;
-        for (u32 i = 0; i < 4; i++) {
-            wf = &dbg.waveforms.chan[i].get();
-            wf->setup(MASTER_CYCLES_PER_FRAME);
-            if (i < 3) sn76489.sw[i].ext_enable    = wf->ch_output_enabled;
-            else       sn76489.noise.ext_enable     = wf->ch_output_enabled;
-        }
+        auto &main_wf = dbg.waveforms.main.get();
+        dbg_wf_setup(main_wf, MASTER_CYCLES_PER_FRAME, sn76489.ext_enable);
+        if (main_wf.clock_divider == 0) main_wf.clock_divider = main_wf.default_clock_divider;
+        clock.apu_divisor = main_wf.clock_divider;
+        for (u32 i = 0; i < 3; i++)
+            dbg_wf_setup(dbg.waveforms.chan[i].get(), MASTER_CYCLES_PER_FRAME, sn76489.sw[i].ext_enable);
+        dbg_wf_setup(dbg.waveforms.chan[3].get(), MASTER_CYCLES_PER_FRAME, sn76489.noise.ext_enable);
     }
 
     u32 current_frame = clock.frames_since_restart;

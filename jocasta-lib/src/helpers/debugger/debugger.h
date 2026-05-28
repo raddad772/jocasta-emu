@@ -449,6 +449,18 @@ struct debug_waveform {
     }
 };
 
+// ── debug_waveform (v1) helper ────────────────────────────────────────────────
+// Setup a v1 waveform for the current frame and propagate ch_output_enabled to
+// a component's ext_enable field.  The two-argument form of wf.setup() is a
+// no-op when samples_requested == 0, but ch_output_enabled is always valid and
+// must still be forwarded so that channel-muting continues to work even when no
+// debugger waveform is being rendered.
+static inline void dbg_wf_setup(debug_waveform &wf, float cycles_per_frame, bool &ext_enable)
+{
+    wf.setup(cycles_per_frame);
+    ext_enable = wf.ch_output_enabled;
+}
+
 namespace debug::waveform2 {
     enum kinds {
         wk_big=0, // 400 samples
@@ -505,6 +517,52 @@ namespace debug::waveform2 {
         view_node root{};
         bool any_solo{};
     };
+
+    // ── debug::waveform2 (v2) helpers ─────────────────────────────────────────
+    // All functions are null-safe: passing wf == nullptr is always well-defined.
+
+    // True when wf is non-null and has samples to collect this frame.
+    static inline bool wf_requested(const wf *w)
+    {
+        return w && w->samples_requested > 0;
+    }
+
+    // Null-safe setup.  Returns true when samples are requested (the caller
+    // may want to arm a scheduler event to drive sampling).
+    static inline bool wf_setup(wf *w, double cycles_per_frame)
+    {
+        if (!w) return false;
+        w->setup(cycles_per_frame);
+        return w->samples_requested > 0;
+    }
+
+    // Push one mono sample.  Returns false when the buffer is full so the
+    // caller can stop scheduling further events.
+    static inline bool wf_push_mono(wf *w, float sample)
+    {
+        if (!w || w->user.buf_pos >= w->samples_requested) return false;
+        static_cast<float *>(w->buf[w->rendering_buf].ptr)[w->user.buf_pos++] = sample;
+        return w->user.buf_pos < w->samples_requested;
+    }
+
+    // Push one interleaved stereo sample pair.  Returns false when full.
+    static inline bool wf_push_stereo(wf *w, float left, float right)
+    {
+        if (!w || (w->user.buf_pos + 1) >= (w->samples_requested << 1)) return false;
+        float *fb = static_cast<float *>(w->buf[w->rendering_buf].ptr);
+        fb[w->user.buf_pos++] = left;
+        fb[w->user.buf_pos++] = right;
+        return w->user.buf_pos < (w->samples_requested << 1);
+    }
+
+    // Returns true when the channel should contribute to output.
+    // nosolo is true when no channel is currently soloed (pass audio.nosolo).
+    // When at least one channel is soloed, only waveforms with ch_output_solo
+    // set play through.
+    static inline bool wf_channel_enabled(bool nosolo, const wf *w)
+    {
+        return nosolo || (w && w->ch_output_solo);
+    }
 
 }
 

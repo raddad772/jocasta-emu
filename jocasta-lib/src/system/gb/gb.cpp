@@ -171,13 +171,9 @@ void core::killall() {
 
 u32 core::finish_frame() {
     if (::dbg.do_debug && dbg.waveforms.main.vec != nullptr) {
-        dbg.waveforms.main.get().setup(MASTER_CYCLES_PER_FRAME);
-        apu.ext_enable = dbg.waveforms.main.get().ch_output_enabled;
-        for (u32 i = 0; i < 4; i++) {
-            auto *wf = &dbg.waveforms.chan[i].get();
-            wf->setup(MASTER_CYCLES_PER_FRAME);
-            apu.channels[i].ext_enable = wf->ch_output_enabled;
-        }
+        dbg_wf_setup(dbg.waveforms.main.get(), MASTER_CYCLES_PER_FRAME, apu.ext_enable);
+        for (u32 i = 0; i < 4; i++)
+            dbg_wf_setup(dbg.waveforms.chan[i].get(), MASTER_CYCLES_PER_FRAME, apu.channels[i].ext_enable);
     }
 	step_master(clock.cycles_left_this_frame);
 	return ppu.last_used_buffer;

@@ -89,24 +89,16 @@ static inline float i16_to_float(i16 val)
 static void sample_audio_debug_max(void *ptr, u64 key, u64 clock, u32 jitter)
 {
     auto *th = static_cast<core *>(ptr);
-    auto *dw = th->dbg.waveforms2.main_cache;
-    if (!dw || dw->user.buf_pos >= (dw->samples_requested << 1)) return; // buffer full — stop
-    static_cast<float *>(dw->buf[dw->rendering_buf].ptr)[dw->user.buf_pos] = i16_to_float(th->spu.sample_l);
-    dw->user.buf_pos++;
-    static_cast<float *>(dw->buf[dw->rendering_buf].ptr)[dw->user.buf_pos] = i16_to_float(th->spu.sample_r);
-    dw->user.buf_pos++;
+    if (!debug::waveform2::wf_push_stereo(th->dbg.waveforms2.main_cache,
+                                           i16_to_float(th->spu.sample_l),
+                                           i16_to_float(th->spu.sample_r))) return;
     th->audio.next_sample_cycle_max += th->audio.master_cycles_per_max_sample;
     th->scheduler.only_add_abs(static_cast<i64>(th->audio.next_sample_cycle_max), 0, th, &sample_audio_debug_max, nullptr);
 }
 
 static void sample_audio_to_stereo(core *th, debug::waveform2::wf *dw, i16 l, i16 r, bool &ee) {
-    ee = th->audio.nosolo || dw->ch_output_solo;
-    if (dw->user.buf_pos < (dw->samples_requested << 1)) {
-        static_cast<float *>(dw->buf[dw->rendering_buf].ptr)[dw->user.buf_pos] = i16_to_float(l);
-        dw->user.buf_pos++;
-        static_cast<float *>(dw->buf[dw->rendering_buf].ptr)[dw->user.buf_pos] = i16_to_float(r);
-        dw->user.buf_pos++;
-    }
+    ee = debug::waveform2::wf_channel_enabled(th->audio.nosolo, dw);
+    debug::waveform2::wf_push_stereo(dw, i16_to_float(l), i16_to_float(r));
 }
 
 static void sample_audio_debug_med(void *ptr, u64 key, u64 clock, u32 jitter) {
@@ -129,13 +121,9 @@ static void sample_audio_debug_min(void *ptr, u64 key, u64 clock, u32 jitter) {
     auto *th = static_cast<core *>(ptr);
     bool any_remaining = false;
     for (int j = 0; j < 24; j++) {
-        auto *dw = th->dbg.waveforms2.channels.chan_cache[j];
-        if (dw && dw->user.buf_pos < dw->samples_requested) {
-            i16 sv = th->spu.voices[j].sample;
-            static_cast<float *>(dw->buf[dw->rendering_buf].ptr)[dw->user.buf_pos] = i16_to_float(sv);
-            dw->user.buf_pos++;
+        if (debug::waveform2::wf_push_mono(th->dbg.waveforms2.channels.chan_cache[j],
+                                            i16_to_float(th->spu.voices[j].sample)))
             any_remaining = true;
-        }
     }
     if (!any_remaining) return; // all buffers full — stop
     th->audio.next_sample_cycle_min += th->audio.master_cycles_per_min_sample;
