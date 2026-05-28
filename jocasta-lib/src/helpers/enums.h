@@ -1,0 +1,55 @@
+#pragma once
+
+namespace jsm {
+	enum systems {
+		DMG,
+		GBC,
+		NES,
+		SNES,
+		SG1000,
+		SMS1,
+		SMS2,
+		GG,
+		DREAMCAST,
+		ZX_SPECTRUM_48K,
+		ZX_SPECTRUM_128K,
+		BBC_MICRO,
+		GENESIS_USA,
+		MEGADRIVE_PAL,
+		GENESIS_JAP,
+		PS1,
+		ATARI2600,
+		MAC128K,
+		MAC512K,
+		MACPLUS_1MB,
+		APPLEIIe,
+		GBA,
+		NDS,
+		GALAKSIJA,
+		TURBOGRAFX16,
+		COSMAC_VIP_2k,
+		COSMAC_VIP_4k,
+		COMMODORE64,
+		CASIO_PV1000,
+		NEOGEO_POCKET,
+		NEOGEO_POCKET_COLOR,
+		NEOGEO_AES,
+		NEOGEO_MVS
+	};
+
+	enum regions {
+		USA,
+		JAPAN,
+		EUROPE
+	};
+
+	enum display_kinds {
+		LCD,
+		CRT
+	};
+	enum display_standards {
+		NTSC,
+		PAL,
+		NSTCJ
+	};
+};

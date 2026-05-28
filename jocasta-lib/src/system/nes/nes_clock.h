@@ -1,0 +1,44 @@
+//
+// Created by Dave on 2/5/2024.
+//
+
+#pragma once
+#include "helpers/int.h"
+#include "helpers/serialize/serialize.h"
+
+struct NES_clock {
+    void reset();
+    u64 master_clock{};
+    u64 master_frame{};
+
+    u32 frames_since_restart{};
+
+    u64 cpu_master_clock{};
+    u64 apu_master_clock{};
+    u64 ppu_master_clock{};
+    u64 trace_cycles{};
+
+    u64 nmi{};
+    u64 cpu_frame_cycle{};
+    i64 ppu_frame_cycle{};
+
+    struct {
+        u32 fps = 60;
+        u32 apu_counter_rate = 60;
+        u32 cpu_divisor = 12;
+        u32 ppu_divisor = 4;
+        i32 bottom_rendered_line = 239;
+        i32 post_render_ppu_idle = 240;
+        u32 hblank_start = 280;
+        i32 vblank_start = 241;
+        i32 vblank_end = 261;
+        i32 ppu_pre_render = 261;
+        u32 pixels_per_scanline = 280;
+    } timing{};
+
+    i32 ppu_y{};
+    u32 frame_odd{};
+
+    void serialize(serialized_state &state) const;
+    void deserialize(serialized_state &state);
+};

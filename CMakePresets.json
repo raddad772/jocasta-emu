@@ -1,0 +1,135 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "macos-debug",
+      "displayName": "macOS Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-macos-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "macos-release",
+      "displayName": "macOS Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-macos-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "macos-asan",
+      "displayName": "macOS ASan",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-macos-asan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "JOCASTA_ASAN": "ON"
+      }
+    },
+    {
+      "name": "windows-clang-mingw-debug",
+      "displayName": "Windows clang-mingw Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-windows-clang-mingw-debug",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/windows-clang-mingw.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "windows-clang-mingw-release",
+      "displayName": "Windows clang-mingw Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-windows-clang-mingw-release",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/windows-clang-mingw.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "linux-x64-debug",
+      "displayName": "Linux x64 Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-linux-x64-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "JOCASTA_BUILD_GUI": "ON"
+      }
+    },
+    {
+      "name": "linux-x64-release",
+      "displayName": "Linux x64 Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-linux-x64-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "JOCASTA_BUILD_GUI": "ON"
+      }
+    },
+    {
+      "name": "dreamcast-debug",
+      "displayName": "Dreamcast Debug",
+      "cmakeExecutable": "/Users/dave/bin/kos-cmake",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-dreamcast-debug",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/dreamcast-kos.cmake",
+      "environment": {
+        "KOS_ARCH": "dreamcast",
+        "KOS_SUBARCH": "pristine",
+        "KOS_BASE": "/opt/toolchains/dc/kos",
+        "KOS_PORTS": "/opt/toolchains/dc/kos-ports",
+        "KOS_CC_BASE": "/opt/toolchains/dc/sh-elf",
+        "KOS_CC_PREFIX": "sh-elf",
+        "DC_ARM_BASE": "/opt/toolchains/dc/arm-eabi",
+        "DC_ARM_PREFIX": "arm-eabi",
+        "DC_TOOLS_BASE": "/opt/toolchains/dc/bin",
+        "KOS_GENROMFS": "/opt/toolchains/dc/kos/utils/genromfs/genromfs",
+        "KOS_MAKE": "make",
+        "KOS_LOADER": "dc-tool -x",
+        "KOS_INC_PATHS": " -I/opt/toolchains/dc/kos/include -I/opt/toolchains/dc/kos/kernel/arch/dreamcast/include -I/opt/toolchains/dc/kos/addons/include/ -I/opt/toolchains/dc/kos-ports/include",
+        "KOS_LIB_PATHS": "-L/opt/toolchains/dc/kos/lib/dreamcast -L/opt/toolchains/dc/kos/addons/lib/dreamcast -L/opt/toolchains/dc/kos-ports/lib",
+        "KOS_LIBS": "-Wl,--start-group -lkallisti -lm -lc -lgcc -Wl,--end-group",
+        "KOS_CC": "/opt/toolchains/dc/sh-elf/bin/sh-elf-gcc",
+        "KOS_CCPLUS": "/opt/toolchains/dc/sh-elf/bin/sh-elf-g++",
+        "KOS_AS": "/opt/toolchains/dc/sh-elf/bin/sh-elf-as",
+        "KOS_AR": "/opt/toolchains/dc/sh-elf/bin/sh-elf-gcc-ar",
+        "KOS_OBJCOPY": "/opt/toolchains/dc/sh-elf/bin/sh-elf-objcopy",
+        "KOS_OBJDUMP": "/opt/toolchains/dc/sh-elf/bin/sh-elf-objdump",
+        "KOS_ADDR2LINE": "/opt/toolchains/dc/sh-elf/bin/sh-elf-addr2line",
+        "KOS_LD": "/opt/toolchains/dc/sh-elf/bin/sh-elf-ld",
+        "KOS_RANLIB": "/opt/toolchains/dc/sh-elf/bin/sh-elf-gcc-ranlib",
+        "KOS_STRIP": "/opt/toolchains/dc/sh-elf/bin/sh-elf-strip",
+        "KOS_SIZE": "/opt/toolchains/dc/sh-elf/bin/sh-elf-size",
+        "KOS_CFLAGS": " -O2 -fno-PIC -fno-PIE -fomit-frame-pointer -m4-single -ml -mfsrra -mfsca -ffunction-sections -fdata-sections -matomic-model=soft-gusa -ftls-model=local-exec -D__DREAMCAST__ -I/opt/toolchains/dc/kos/include -I/opt/toolchains/dc/kos/kernel/arch/dreamcast/include -I/opt/toolchains/dc/kos/addons/include/ -I/opt/toolchains/dc/kos-ports/include -D_arch_dreamcast -D_arch_sub_pristine -Wall -g",
+        "KOS_LDFLAGS": " -O2 -fno-PIC -fno-PIE -fomit-frame-pointer -m4-single -ml -mfsrra -mfsca -ffunction-sections -fdata-sections -matomic-model=soft-gusa -ftls-model=local-exec -D__DREAMCAST__ -I/opt/toolchains/dc/kos/include -I/opt/toolchains/dc/kos/kernel/arch/dreamcast/include -I/opt/toolchains/dc/kos/addons/include/ -I/opt/toolchains/dc/kos-ports/include -D_arch_dreamcast -D_arch_sub_pristine -Wall -g -Wl,--gc-sections -T/opt/toolchains/dc/kos/utils/ldscripts/shlelf.xc -nostdlib -L/opt/toolchains/dc/kos/lib/dreamcast -L/opt/toolchains/dc/kos/addons/lib/dreamcast -L/opt/toolchains/dc/kos-ports/lib",
+        "KOS_CSTD": "-std=gnu17",
+        "KOS_CPPSTD": "-std=gnu++17",
+        "PATH": "/opt/toolchains/dc/sh-elf/bin:/opt/toolchains/dc/kos/utils/build_wrappers:/opt/toolchains/dc/bin:/opt/homebrew/bin:$penv{PATH}"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "JOCASTA_DREAMCAST": "ON"
+      }
+    },
+    {
+      "name": "dreamcast-release",
+      "displayName": "Dreamcast Release",
+      "cmakeExecutable": "/Users/dave/bin/kos-cmake",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-dreamcast-release",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/dreamcast-kos.cmake",
+      "inherits": "dreamcast-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "JOCASTA_DREAMCAST": "ON"
+      },
+      "environment": {
+        "KOS_CFLAGS": " -O2 -fno-PIC -fno-PIE -fomit-frame-pointer -m4-single -ml -mfsrra -mfsca -ffunction-sections -fdata-sections -matomic-model=soft-gusa -ftls-model=local-exec -D__DREAMCAST__ -I/opt/toolchains/dc/kos/include -I/opt/toolchains/dc/kos/kernel/arch/dreamcast/include -I/opt/toolchains/dc/kos/addons/include/ -I/opt/toolchains/dc/kos-ports/include -D_arch_dreamcast -D_arch_sub_pristine -Wall",
+        "KOS_LDFLAGS": " -O2 -fno-PIC -fno-PIE -fomit-frame-pointer -m4-single -ml -mfsrra -mfsca -ffunction-sections -fdata-sections -matomic-model=soft-gusa -ftls-model=local-exec -D__DREAMCAST__ -I/opt/toolchains/dc/kos/include -I/opt/toolchains/dc/kos/kernel/arch/dreamcast/include -I/opt/toolchains/dc/kos/addons/include/ -I/opt/toolchains/dc/kos-ports/include -D_arch_dreamcast -D_arch_sub_pristine -Wall -Wl,--gc-sections -T/opt/toolchains/dc/kos/utils/ldscripts/shlelf.xc -nostdlib -L/opt/toolchains/dc/kos/lib/dreamcast -L/opt/toolchains/dc/kos/addons/lib/dreamcast -L/opt/toolchains/dc/kos-ports/lib"
+      }
+    }
+  ]
+}

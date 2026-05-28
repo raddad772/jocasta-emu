@@ -1,0 +1,36 @@
+//
+// Created by . on 2/20/26.
+//
+
+#include "debugger.h"
+#include "waveform2.h"
+namespace debug::waveform2 {
+view_node *view_node::add_child_wf(kinds kind_in, cvec_ptr<view_node> &wfptr)
+{
+    auto *b = &children.emplace_back();
+    wfptr.make(children, children.size()-1);
+    b->data.kind = kind_in;
+    switch (kind_in) {
+        case wk_big:
+            b->data.samples_requested = 400;
+            break;
+        case wk_medium:
+            b->data.samples_requested = 200;
+            break;
+        case wk_small:
+            b->data.samples_requested = 100;
+            break;
+        default:
+            NOGOHERE;
+    }
+
+    return b;
+}
+
+view_node &view_node::add_child_category(const char *name_in, u32 num_reserve) {
+    auto &b = children.emplace_back();
+    snprintf(b.name, sizeof(b.name), "%s", name_in);
+    b.children.reserve(num_reserve);
+    return b;
+}
+}

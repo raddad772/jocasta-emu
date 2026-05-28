@@ -1,0 +1,78 @@
+//
+// Created by . on 2/15/25.
+//
+
+#pragma once
+#include "helpers/int.h"
+
+namespace PS1 {
+
+enum DMA_direction {
+    D_to_ram,
+    D_from_ram,
+};
+
+enum DMA_step {
+    D_increment = 0,
+    D_decrement = 1
+};
+
+enum DMA_sync {
+    D_manual,
+    D_request,
+    D_linked_list
+};
+
+struct core;
+struct DMA_channel {
+    void do_linked_list();
+    bool can_dreq();
+    void do_block();
+    void try_dreq();
+    void do_single_block_request();
+    void do_dma();
+    bool should_trigger();
+    u32 get_control();
+    void set_control(u32 val);
+    [[nodiscard]] u32 transfer_size() const;
+    core *bus{};
+    u32 num{}, enable{}, trigger{}, chop{};
+    u32 master_enable{1};
+    u32 chop_dma_size{}, chop_cpu_size{};
+    u32 unknown{};
+    u32 base_addr{};
+    u32 block_size{}, block_count{};
+    DMA_step step{D_increment};
+    DMA_sync sync{D_manual};
+    DMA_direction direction{D_to_ram};
+};
+
+struct DMA {
+    void reset();
+    void complete_transfer(u32 num);
+    u32 irq_status();
+    u32 read(u32 addr, u32 sz);
+    void write(u32 addr, u32 sz, u32 val);
+    DMA_channel channels[7]{};
+    explicit DMA(core *parent) : bus(parent) {
+        for (u32 i = 0; i < 7; i++) {
+            auto &c = channels[i];
+            c.bus = parent;
+            c.num = i;
+        }
+    }
+    core *bus;
+    u32 control{};
+    u32 get_DICR();
+    struct {
+        u32 IC{}, lowother{};
+        u32 IF{}, IE{};
+        u32 mode{};
+        u32 level{};
+        bool master_enable{};
+    } irq{};
+    void update_IRQs();
+};
+
+
+}

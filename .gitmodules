@@ -1,0 +1,24 @@
+[submodule "jocasta-gui/vendor/myimgui"]
+	path = jocasta-gui/vendor/myimgui
+	url = https://github.com/raddad772/imgui.git
+[submodule "jocasta-gui/vendor/glfw3webgpu"]
+	path = jocasta-gui/vendor/glfw3webgpu
+	url = https://github.com/eliemichel/glfw3webgpu.git
+[submodule "jocasta-gui/vendor/miniaudio"]
+	path = jocasta-gui/vendor/miniaudio
+	url = https://github.com/raddad772/miniaudio.git
+[submodule "jocasta-gui/vendor/WebGPU-distribution"]
+	path = jocasta-gui/vendor/WebGPU-distribution
+	url = https://github.com/eliemichel/WebGPU-distribution.git
+[submodule "jocasta-gui/vendor/clownresampler"]
+	path = jocasta-gui/vendor/clownresampler
+	url = https://github.com/Clownacy/clownresampler.git
+[submodule "jocasta-gui/vendor/miniz"]
+	path = jocasta-gui/vendor/miniz
+	url = git@github.com:richgel999/miniz.git
+[submodule "jocasta-gui/vendor/mINI"]
+	path = jocasta-gui/vendor/mINI
+	url = git@github.com:metayeti/mINI.git
+[submodule "jocasta-gui/vendor/nanosha256"]
+	path = jocasta-gui/vendor/nanosha256
+	url = git@github.com:oopsio/nanosha256.git

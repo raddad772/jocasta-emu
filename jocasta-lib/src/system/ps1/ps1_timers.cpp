@@ -1,0 +1,407 @@
+//
+// Created by . on 3/4/25.
+//
+
+#include <cstdlib>
+#include <cassert>
+
+#include "ps1_bus.h"
+#include "ps1_timers.h"
+
+#define ADDBUS 0
+
+namespace PS1 {
+void TIMER::deschedule()
+{
+    if (overflow.still_sched) {
+        bus->scheduler.delete_if_exist(overflow.sched_id);
+    }
+}
+
+void TIMER::reset()
+{
+    on_system_clock = 1;
+    mode.u = 0;
+    deschedule();
+    start.cycle = 0;
+    start.value = 0;
+    running = 1;
+}
+
+void TIMER::vblank(u64 key) {
+    if (key == 0) { // vblank off
+        if (mode.sync_enable) {
+            switch (mode.sync_mode) {
+                case 0: // 0 = Pause counter during Vblank(s)
+                    disable();
+                    break;
+                case 1: // 1 = Reset counter to 0000h at Hblank(s)
+                    write(0, 4);
+                    break;
+                case 2: // 2 = Reset counter to 0000h at Hblank(s) and pause outside of Hblank
+                    write(0, 4);
+                    enable();
+                    break;
+                case 3: // 3 = Pause until Hblank occurs once, then switch to Free Run
+                    break;
+            }
+        }
+    }
+    else { // vblank on
+        if (mode.sync_enable) {
+            switch (mode.sync_mode) {
+                case 0: // 0 = Pause counter during Hblank(s)
+                    enable();
+                    break;
+                case 1: // 1 = Reset counter to 0000h at Hblank(s)
+                    break;
+                case 2: // 2 = Reset counter to 0000h at Hblank(s) and pause outside of Hblank
+                    write(0, 4);
+                    disable();
+                    break;
+                case 3: // 3 = Pause until vblank occurs once, then switch to Free Run
+                    enable();
+                    mode.sync_enable = 0;
+                    break;
+            }
+        }
+    }
+}
+
+void TIMER::hblank(u64 key)
+{
+    if (key == 0) { // hblank off
+        if (mode.sync_enable) {
+            switch (mode.sync_mode) {
+                case 0: // 0 = Pause counter during Hblank(s)
+                    enable();
+                    break;
+                case 1: // 1 = Reset counter to 0000h at Hblank(s)
+                    break;
+                case 2: // 2 = Reset counter to 0000h at Hblank(s) and pause outside of Hblank
+                    //write(0, 4);
+                    disable();
+                    break;
+                case 3: // 3 = Pause until Hblank occurs once, then switch to Free Run
+                    break;            }
+        }
+    }
+    else { // hblank on
+        if (mode.sync_enable) {
+            switch (mode.sync_mode) {
+                case 0: // 0 = Pause counter during Hblank(s)
+                    disable();
+                    break;
+                case 1: // 1 = Reset counter to 0000h at Hblank(s)
+                    write(0, 4);
+                    break;
+                case 2: // 2 = Reset counter to 0000h at Hblank(s) and pause outside of Hblank
+                    write(0, 4);
+                    enable();
+                    break;
+                case 3: // 3 = Pause until Hblank occurs once, then switch to Free Run
+                    enable();
+                    mode.sync_enable = 0;
+                    break;
+
+            }
+        }
+    }
+}
+
+u64 core::dotclock()
+{
+    return (u64)(static_cast<float>(clock.master_cycle_count) * clock.dot.ratio.cpu_to_dotclock);
+}
+
+u32 TIMER::read_clk(u64 clk) const
+{
+    u32 r = start.value;
+    if (running) r += clk - start.cycle;
+    //assert(r<0x10000);
+    return r & 0xFFFF;
+}
+
+u64 TIMER::get_clock_source()
+{
+    //if (num == 1) printf("\nTimer %d on system clock: %d. master count:%lld", num, on_system_clock, bus->clock.master_cycle_count);
+    if (on_system_clock) return bus->clock.master_cycle_count;
+    switch(num) {
+        case 0:
+            return bus->dotclock();
+        case 1:
+            return bus->clock.hblank_clock;
+        case 2:
+            //printf("\nRETURN BUS CLOCK/8 bus->clock.master_cycle_count >> 3 %d", static_cast<u32>(bus->clock.master_cycle_count >> 3));
+            return bus->clock.master_cycle_count >> 3;
+            //return (bus->clock.master_cycle_count * 5) / 64; // parasite eve 2
+        default:
+            NOGOHERE;
+    }
+    return 0;
+}
+
+u32 TIMER::read() {
+    u32 v = read_clk(get_clock_source());
+    static u32 last=0;
+    //printf("\nReading timer num %d: %d diff:%d diffhex:%x @%lld", num, v, v - last, v - last, bus->clock.master_cycle_count);
+    last = v;
+    return v;
+}
+
+void timer_irq_down(void *ptr, u64 key, u64 clock, u32 jitter)
+{
+    auto *th = static_cast<core *>(ptr);
+    auto *t = &th->timers[key];
+    t->mode.irq_request = 1; // 1 = no
+    th->set_irq(static_cast<IRQ>(IRQ_TMR0+key), 0);
+}
+
+
+// Determine ticks until overflow
+// Schedule if it's not at the same time
+void TIMER::disable()
+{
+    if (!running) return;
+    running = 0;
+    start.value = read_clk(get_clock_source());
+    if (overflow.still_sched) {
+        bus->scheduler.delete_if_exist(overflow.sched_id);
+    }
+}
+
+u64 core::time_til_next_hblank(u64 clk)
+{
+
+    // Determine which cycle of current line
+    u64 line_cycle = (clk - clock.frame_cycle_start) % clock.timing.scanline.cycles;
+
+    if (line_cycle >= clock.timing.scanline.hblank.start_on_cycle) { // We're in the hblank portion of a line,
+        // Account for rest of scanline
+        return (clock.timing.scanline.cycles - line_cycle) + clock.timing.scanline.hblank.start_on_cycle;
+    }
+    else { // We're not in the hblank portion of a line.
+        return clock.timing.scanline.hblank.start_on_cycle - line_cycle;
+    }
+}
+
+u64 core::calculate_timer1_hblank(u32 diff)
+{
+    // This routine answers one question:
+    // How many CPU cycles until x hblanks have happened?
+
+    u64 clk = clock_current();
+    // First, determine time til next hblank
+    u64 nd = time_til_next_hblank(clk);
+    assert(diff!=0);
+    diff--;
+    nd += clock.timing.scanline.cycles * diff;
+    return nd;
+}
+
+void TIMER::do_irq() {
+    if (did_irq && !mode.irq_repeat) return; // One-shot mode
+    if (mode.irq_toggle) { // 1 = toggle
+        mode.irq_request ^= 1;
+        // 0 = short 1-bit pulse. 1 = toggle
+    }
+    else {
+        mode.irq_request = 0;
+    }
+    bus->set_irq(static_cast<IRQ>(IRQ_TMR0+num), mode.irq_request ^ 1);
+    if (mode.irq_request == 0 && !mode.irq_toggle) {
+        // Schedule pulse-down
+        bus->scheduler.only_add_abs(bus->clock_current() + 20, num, bus, &timer_irq_down, nullptr);
+    }
+    did_irq = true;
+}
+
+void timer_overflow(void *ptr, u64 timer_num, u64 current_clock, u32 jitter)
+{
+    u64 clk = current_clock - jitter;
+    auto *th = static_cast<TIMER *>(ptr);
+    auto *t = &th->bus->timers[timer_num];
+
+    u32 value = t->overflow.at & 0xFFFF;
+
+    if (value == 0xFFFF) {
+        t->mode.reached_ffff = 1;
+        if (t->mode.irq_on_ffff) t->do_irq();
+    }
+    else if (value == t->target) {
+        t->mode.reached_target = 1;
+        if (t->mode.irq_on_target) t->do_irq();
+    }
+    else {
+        printf("\nUHOH ERROR!");
+    }
+
+    // Now determine if we reset...
+    if ((value == 0xFFFF) || ((value == t->target) && t->mode.reset_when)) {
+        t->start.value = 0;
+    }
+    if (t->on_system_clock) t->start.cycle = th->bus->clock_current() + ADDBUS;
+    else t->start.cycle = t->get_clock_source();
+
+    // Schedule next overflow...
+    t->reschedule();
+}
+
+void TIMER::reschedule()
+{
+    if (!running) {
+        deschedule();
+        return;
+    }
+
+    // TODO: calculate out complicated hblank/vblank stuff. it's doable.
+
+    // Overflow is either on 0xFFFF or target, whichever is next...
+    u32 overflow_at = 0xFFFF;
+    u64 clk = get_clock_source();
+    u32 current_value  = read_clk(clk) & 0xFFFF;
+
+    if (current_value < target) overflow_at = target;
+    overflow.at = overflow_at;
+
+
+    if (current_value == overflow_at) overflow_at += target + 0x10000;
+
+    u32 diff = overflow_at - current_value;
+
+    // Now convert to our clock cycles...
+    if (!on_system_clock) {
+        switch(num) {
+            case 0: // on the dot clock...
+                diff = static_cast<u64>((float) diff * bus->clock.dot.ratio.cpu_to_dotclock);
+                break;
+            case 1: // on hblank...we shouldn't be here.
+                diff = bus->calculate_timer1_hblank(diff);
+                break;
+            case 2: // diff is currently in >>=3-ness.
+                diff <<= 3;
+                break;
+            default:
+                NOGOHERE;
+        }
+    }
+
+    u64 on_cycle = bus->clock_current() + diff;
+
+    bool do_sched = true;
+    if (overflow.still_sched) {
+        if (overflow.sch_cycle != on_cycle) {
+            deschedule();
+        }
+        else { // it's already scheduled for the proper time
+            do_sched = false;
+        }
+    }
+    if (do_sched) {
+        overflow.sch_cycle = on_cycle;
+        overflow.sched_id = bus->scheduler.only_add_abs(on_cycle, num, this, &timer_overflow, &overflow.still_sched);
+    }
+}
+
+void TIMER::enable()
+{
+    if (running) return;
+
+    running = 1;
+
+    u64 clk = get_clock_source();
+    if (on_system_clock) start.cycle = bus->clock_current() + ADDBUS;
+    else start.cycle = clk;
+    reschedule();
+}
+
+void TIMER::setup() {
+    switch (num) {
+        case 0:
+            // Need to determine if this timer is on sysclk or not,
+            on_system_clock = (mode.clock_source & 1) ^ 1;
+
+            // If it is running or not currently,
+            running = !(mode.sync_enable && mode.sync_mode == 3); // if so, we pause until hblank occurs...
+            if (on_system_clock) start.cycle = bus->clock_current() + ADDBUS;
+            else start.cycle = bus->dotclock();
+
+            // Determine overflow timing
+            reschedule();
+            break;
+        case 1:
+            // Need to determine if this timer is on sysclk or not,
+            on_system_clock = (mode.clock_source & 1) ^ 1;
+
+            // If it is running or not currently,
+            running = !(mode.sync_enable && mode.sync_mode == 3); // if so, we pause until vblank occurs...
+            if (on_system_clock) start.cycle = bus->clock_current() + ADDBUS;
+            else start.cycle = bus->clock.hblank_clock;
+
+            // Determine overflow timing
+            reschedule();
+            break;
+        case 2:
+            // Need to determine if this timer is on sysclk or not,
+            on_system_clock = mode.clock_source < 2;
+
+            // If it is running or not currently,
+            if (mode.sync_enable) {
+                running = (mode.sync_mode == 1) || (mode.sync_mode == 2);
+            }
+            else running = 1;
+
+            if (on_system_clock) start.cycle = bus->clock_current() + ADDBUS;
+            else start.cycle = bus->clock_current() >> 3;
+
+            // Determine overflow timing
+            reschedule();
+            break;
+    }
+}
+
+
+void TIMER::reset(u32 reset_to)
+{
+    start.cycle = bus->clock_current() + ADDBUS;
+    start.value = reset_to;
+    mode.irq_request = 1; // 1 = no!
+}
+
+void TIMER::write(u32 val, u8 sz)
+{
+    //printf("\nWR COUNT%d:%04x", num, val);
+    start.value = val & 0xFFFF;
+    if (on_system_clock) start.cycle = bus->clock_current() + ADDBUS;
+    else start.cycle = get_clock_source();
+    reschedule();
+}
+
+void TIMER::write_target(u32 val, u8 sz)
+{
+    //printf("\nWR TARGET%d:%04x", num, val);
+    target = val & 0xFFFF;
+    reschedule();
+}
+
+void TIMER::write_mode(u32 val, u8 sz)
+{
+    val &= 0b1111111111;
+    u32 old_mode = mode.u;
+    mode.u = (mode.u & 0b1111110000000000) | val;
+    did_irq = false;
+    // Reset to 0
+    start.value = 0;
+    if (on_system_clock) start.cycle = bus->clock_current() + ADDBUS;
+    else start.cycle = get_clock_source();
+
+    if (old_mode != mode.u)
+        setup();
+    else
+        reschedule();
+
+    mode.irq_request = 1;
+    bus->set_irq(static_cast<IRQ>(IRQ_TMR0+num), 0);
+}
+
+}

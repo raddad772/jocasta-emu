@@ -1,0 +1,195 @@
+//
+// Created by . on 2/20/25.
+//
+
+#include "pixel_helpers.h"
+#include "ps1_gpu.h"
+#include "helpers/multisize_memaccess.cpp"
+
+namespace PS1::GPU {
+//#define DOY (y + draw_y_offset)
+//#define DOX (x + draw_x_offset)
+#define DOY (y)
+#define DOX (x)
+
+
+void core::setpix_split(i32 y, i32 x, u32 r, u32 g, u32 b, u32 tex_mask)
+{
+    // VRAM is 512 1024-wide 16-bit words. so 2048 bytes per line
+    i32 ry = DOY;
+    i32 rx = DOX;
+    if ((ry < draw_area_top) || (ry > draw_area_bottom)) return;
+    if ((rx < draw_area_left) || (rx > draw_area_right)) return;
+    u32 addr = (2048*ry)+(rx*2);
+
+    if (io.GPUSTAT.preserve_masked_pixels) {
+        u16 v = cR16(VRAM, addr);
+        if (v & 0x8000) return;
+    }
+    u32 color = r | (g << 5) | (b << 10);
+    u32 mask_bit = tex_mask | force_set_mask;
+    //if ((ry == 244) && (rx == 656) && ((color | mask_bit) == 0x6956)) printf("\nSET1 %04x", color | mask_bit);
+
+    cW16(VRAM, addr, color | mask_bit);
+    set_cmd_px(ry, rx);
+}
+
+static inline u32 BLEND1(u32 b, u32 f)
+{
+    // B + F
+    u32 o = b + f;
+    return o > 0x1F ? 0x1F : o;
+}
+
+static inline u32 BLEND2(u32 b, u32 f)
+{
+    // B - F
+    i32 o = static_cast<i32>(b) - static_cast<i32>(f);
+    return o < 0 ? 0 : static_cast<u32>(o);
+}
+
+static inline u32 BLEND3(u32 b, u32 f)
+{
+    // B + F/4
+    u32 o = b + (f >> 2);
+    return o > 0x1F ? 0x1F : o;
+}
+
+
+static u32 blend_semi15(u32 mode, u32 b, u32 f)
+{
+    // move 0, 5, 10
+    // to 0, 8, 16
+    // expand 15 to 24 bit, KINDA
+    u32 b_b = (b >> 10) & 0x1F;
+    u32 b_g = (b >> 5) & 0x1F;
+    u32 b_r = b & 0x1F;
+
+    u32 f_b = (f >> 10) & 0x1F;
+    u32 f_g = (f >> 5) & 0x1F;
+    u32 f_r = f & 0x1F;
+
+    u32 o_b = 0;
+    u32 o_g = 0;
+    u32 o_r = 0;
+
+    switch(mode) {
+        case 0:
+#define BLEND(b, f) (((b) >> 1) + ((f) >> 1))
+            o_b = BLEND(b_b, f_b);
+            o_g = BLEND(b_g, f_g);
+            o_r = BLEND(b_r, f_r);
+#undef BLEND
+            break;
+        case 1:
+            o_b = BLEND1(b_b, f_b);
+            o_g = BLEND1(b_g, f_g);
+            o_r = BLEND1(b_r, f_r);
+            break;
+        case 2:
+            o_b = BLEND2(b_b, f_b);
+            o_g = BLEND2(b_g, f_g);
+            o_r = BLEND2(b_r, f_r);
+            break;
+        case 3:
+            o_b = BLEND3(b_b, f_b);
+            o_g = BLEND3(b_g, f_g);
+            o_r = BLEND3(b_r, f_r);
+            break;
+    }
+    return (o_b << 10) | (o_g << 5) | o_r;
+}
+
+static u32 blend_semi15_split(u32 mode, u32 b, u32 f_r, u32 f_g, u32 f_b)
+{
+    // move 0, 5, 10
+    // to 0, 8, 16
+    // expand 15 to 24 bit, KINDA
+    u32 b_b = (b >> 10) & 0x1F;
+    u32 b_g = (b >> 5) & 0x1F;
+    u32 b_r = b & 0x1F;
+
+    u32 o_b = 0;
+    u32 o_g = 0;
+    u32 o_r = 0;
+
+    switch(mode) {
+        case 0:
+#define BLEND(b, f) (((b) >> 1) + ((f) >> 1))
+            o_b = BLEND(b_b, f_b);
+            o_g = BLEND(b_g, f_g);
+            o_r = BLEND(b_r, f_r);
+#undef BLEND
+            break;
+        case 1:
+            o_b = BLEND1(b_b, f_b);
+            o_g = BLEND1(b_g, f_g);
+            o_r = BLEND1(b_r, f_r);
+            break;
+        case 2:
+            o_b = BLEND2(b_b, f_b);
+            o_g = BLEND2(b_g, f_g);
+            o_r = BLEND2(b_r, f_r);
+            break;
+        case 3:
+            o_b = BLEND3(b_b, f_b);
+            o_g = BLEND3(b_g, f_g);
+            o_r = BLEND3(b_r, f_r);
+            break;
+    }
+    return (o_b << 10) | (o_g << 5) | o_r;
+}
+
+void core::semipix_split(i32 y, i32 x, u32 r, u32 g, u32 b, u32 tex_mask, bool force)
+{
+    // VRAM is 512 1024-wide 16-bit words. so 2048 bytes per line
+    i32 ry = DOY;
+    i32 rx = DOX;
+    if ((ry < draw_area_top) || (ry >= draw_area_bottom)) return;
+    if ((rx < draw_area_left) || (rx >= draw_area_right)) return;
+    u32 addr = ((2048*ry)+(rx*2)) & 0xFFFFF;
+
+    if (io.GPUSTAT.preserve_masked_pixels) {
+        u16 v = cR16(VRAM, addr);
+        if (v & 0x8000) return;
+    }
+
+    u32 color;
+    if (tex_mask || force) {
+        // First sample...
+        u32 bg = cR16(VRAM, addr);
+
+        // Then blend...
+        color = blend_semi15_split(io.GPUSTAT.semi_transparency, bg, r, g, b);
+    }
+    else {
+        color = r | (g << 5) | (b << 10);
+    }
+
+    // Now write...
+    u32 mask_bit = tex_mask | force_set_mask;
+    //if ((ry == 244) && (rx == 656) && ((color | mask_bit) == 0x6956)) printf("\nSET2 %04x", color | mask_bit);
+    cW16(VRAM, addr, color | mask_bit);
+    set_cmd_px(ry, rx);
+}
+
+void core::set_cmd_px(i32 y, i32 x) {
+    y &= 511;
+    x &= 1023;
+    u32 bufaddr = (y * 1024) + x;
+    dbg.buf.cmd[bufaddr] = dbg.CMD;
+    if (dbg.smp.has) {
+        dbg.buf.clut[bufaddr] = dbg.smp.clut;
+        dbg.buf.uv[bufaddr] = dbg.smp.uv;
+        dbg.buf.xy_depth[bufaddr] = dbg.smp.x | (dbg.smp.y << 10) | (dbg.smp.depth << 19);
+        dbg.buf.texel[bufaddr] = dbg.smp.val | 0x80000000;
+        dbg.buf.first_color[bufaddr] = dbg.smp.first_color;
+        dbg.buf.clut_sample[bufaddr] = dbg.smp.clut_sample;
+        dbg.buf.clutaddr[bufaddr] = dbg.smp.clutaddr;
+    }
+    else {
+        dbg.buf.texel[bufaddr] = 0;
+    }
+
+}
+}

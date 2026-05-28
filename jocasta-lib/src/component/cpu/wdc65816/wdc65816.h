@@ -1,0 +1,142 @@
+//
+// Created by . on 4/16/25.
+//
+#pragma once
+
+#include "helpers/int.h"
+
+#include "helpers/debugger/debuggerdefs.h"
+#include "helpers/debugger/debugger.h"
+#include "helpers/debug.h"
+
+namespace WDC65816 {
+
+enum OP {
+    RESET = 0x100,
+    ABORT = 0x101,
+    IRQ = 0x102,
+    NMI = 0x103
+};
+
+struct ctxt {
+    u32 regs; // bits 0-15: regs 0-15. bit 16: CPSR, etc...
+};
+
+struct REGS;
+struct PINS;
+typedef void (*ins_func)(REGS&, PINS&);
+
+union WDC65816_P {
+    struct {
+        u8 C : 1;
+        u8 Z : 1;
+        u8 I: 1;
+        u8 D : 1;
+        u8 X : 1;
+        u8 M : 1;
+        u8 V : 1;
+        u8 N : 1;
+    };
+    u8 v{};
+};
+
+struct REGS {
+    // Hidden registers used internally to track state
+    u32 RES_pending{};
+    u16 IR{}; // Instruction register. Holds opcode.
+    u8 TCU{}; // Timing Control Unit, counts up during execution. Set to 0 at instruction fetch, incremented every cycle thereafter
+    u32 MD{}; // Memory Data Register, holds last known "good" RAM value from a read. Mostly this is not used correctly inside the emukator
+    i32 TR{}; // Temp Register, for operations
+    u32 TA{}; // Temporary register, for operations, usually used for addresses
+    u8 skipped_cycle{}; // For when we...skip a cycle! For timing of jumps and such
+    u8 STP{}; // Are we in STOP?
+    u8 WAI{}; // Are we in WAIT?
+
+    // Registers exposed to programs
+    u16 C{}; // B (high 8 bits) and A (low 8 bits) = C.
+    u32 D{}; // Direct Page register
+    u32 X{}; // X index
+    u32 Y{}; // Y index
+    WDC65816_P P{};
+    u16 PBR{}; // Program Bank Register
+    u32 PC{}; // Program Counter
+    u32 S{}; // Stack pointer
+    u32 DBR{}; // Data Bank Register
+    u32 E{}; // Hidden "Emulation" bit
+
+
+    u8 old_I{}; // old I flag, for use timing IRQs
+    u8 NMI_pending{};
+    u8 IRQ_pending{};
+    u32 interrupt_pending{};
+    i32 NMI_old{};
+};
+
+struct PINS {
+    u8 VPB{}; // Output. Vector Pull, gets folded into PDV
+    u8 ABORT{}; // Input. Abort. Not sure if emulated?
+    u8 IRQ{}; // in. IRQ
+    u8 ML{}; // out. Not emulated
+    u8 NMI{}; // in. NMIs
+    u8 VPA{}; // out. Valid Program Address, gets folded into PDV
+    u8 VDA{}; // out. Valid Data Address, gets folded into PDV
+    u32 Addr{}; // out. Address pins 0-15
+    u8 BA{}; // out. Bank Address, 8 bits
+    u32 D{}; // in/out Data in/out, 8 bits
+    u8 RW{}; // 0 = reading, 1 = writing, *IF* PDV asserted
+    u8 E{}; // state of Emulation bit
+    u8 MX{}; // M and X flags set. Not emulated
+    u8 RES{}; // RESET signal. Not emulated
+
+    u8 PDV{}; // combined program, data, vector pin, to simplify.
+};
+
+struct core {
+    explicit core(u64 *m_clock);
+    PINS pins{};
+    REGS regs{};
+    void set_IRQ_level(u32 level);
+    void set_NMI_level(u32 level);
+    void pprint_context(jsm_string *out);
+    void cycle();
+    void setup_tracing(jsm_debug_read_trace *strct);
+
+private:
+    void eval_WAI();
+    ins_func get_decoded_opcode();
+    void trace_format();
+    void irqdump(u32 nmi);
+
+public:
+    void reset();
+
+    u64 *master_clock;
+    u64 int_clock{};
+
+    struct {
+        jsm_debug_read_trace strct{};
+        jsm_string str{1000}, str2{200};
+        u32 ok{};
+        u32 ins_PC{};
+        u32 PCO{};
+        i32 source_id{};
+
+        struct {
+            dbglog_view *view{};
+            u32 id{};
+        } dbglog{};
+
+    } trace{};
+
+    ins_func ins{};
+
+    DBG_START
+        DBG_EVENT_VIEW_START
+            IRQ, NMI
+        DBG_EVENT_VIEW_END
+        DBG_TRACE_VIEW
+    DBG_END
+
+};
+
+}

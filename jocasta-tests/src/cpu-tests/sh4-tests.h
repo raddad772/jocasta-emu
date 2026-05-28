@@ -1,0 +1,6 @@
+#ifndef JOCASTA_EMUS_SH4_TESTS_H
+#define JOCASTA_EMUS_SH4_TESTS_H
+
+void test_sh4();
+
+#endif //JOCASTA_EMUS_SH4_TESTS_H

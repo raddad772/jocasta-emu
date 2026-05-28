@@ -1,0 +1,175 @@
+# Build all platforms and publish a GitHub Release.
+# - Push to main      → creates/replaces a rolling "nightly" pre-release
+# - Push a v* tag     → creates a proper versioned release
+# - workflow_dispatch → same as a main push (manual nightly)
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+
+  # ── macOS x64 ─────────────────────────────────────────────────────────────
+  build-macos:
+    runs-on: macos-13
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Checkout submodules
+        run: git submodule update --init --recursive
+
+      - name: Install dependencies
+        run: brew install cmake ninja sdl3
+
+      - name: Build macOS release
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdl_prefix=$(brew --prefix sdl3)
+          mkdir -p artifacts
+
+          preset=macos-release
+          build_dir="cmake-build-${preset}"
+          app_dir="${build_dir}/jocasta-gui"
+          package_dir="${app_dir}/package"
+          artifact="${GITHUB_WORKSPACE}/artifacts/jocasta-gui-macos-x64-release.tar.gz"
+
+          cmake --preset "${preset}" \
+            -DJOCASTA_LOCAL_LIBS_DIR="${sdl_prefix}" \
+            -DJOCASTA_SDL3_LIBRARY="${sdl_prefix}/lib/libSDL3.dylib"
+          cmake --build "${build_dir}" --target jocasta-gui
+
+          rm -rf "${package_dir}"
+          mkdir -p "${package_dir}"
+          cp -f "${app_dir}/jocasta-gui" "${package_dir}/"
+          cp -f -L "${sdl_prefix}/lib/libSDL3.0.dylib" "${package_dir}/"
+
+          while IFS= read -r dep; do
+            case "${dep}" in
+              *libSDL3*.dylib)
+                install_name_tool -change "${dep}" "@executable_path/libSDL3.0.dylib" "${package_dir}/jocasta-gui"
+                ;;
+            esac
+          done < <(otool -L "${package_dir}/jocasta-gui" | awk 'NR > 1 {print $1}')
+
+          file "${package_dir}/jocasta-gui"
+          otool -L "${package_dir}/jocasta-gui"
+          (cd "${package_dir}" && cmake -E tar czf "${artifact}" --format=gnutar -- jocasta-gui libSDL3.0.dylib)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: artifacts/jocasta-gui-macos-x64-release.tar.gz
+          if-no-files-found: error
+
+  # ── Linux x64 ─────────────────────────────────────────────────────────────
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Checkout submodules
+        run: git submodule update --init --recursive
+
+      - name: Build Linux release
+        env:
+          JOCASTA_PRESETS: linux-x64-release
+        run: tools/linux/x64/build-jocasta-gui.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: artifacts/jocasta-gui-linux-x64-release.tar.gz
+          if-no-files-found: error
+
+  # ── Windows x64 (cross-compiled) ──────────────────────────────────────────
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Checkout submodules
+        run: git submodule update --init --recursive
+
+      - name: Build Windows release
+        env:
+          JOCASTA_PRESETS: windows-clang-mingw-release
+        run: tools/windows/clang-mingw/build-jocasta-gui.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: artifacts/jocasta-gui-windows-clang-mingw-release.zip
+          if-no-files-found: error
+
+  # ── Publish GitHub Release ─────────────────────────────────────────────────
+  release:
+    needs: [build-macos, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*'
+          path: release-files
+          merge-multiple: true
+
+      - name: List release files
+        run: ls -lh release-files/
+
+      # ── Nightly: every push to main (or manual dispatch) ──────────────────
+      - name: Delete old nightly release and tag
+        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete nightly --yes 2>/dev/null || true
+          git push origin :refs/tags/nightly 2>/dev/null || true
+
+      - name: Publish nightly pre-release
+        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly Build
+          body: |
+            Automated build from the latest commit on `main`.
+
+            **Commit:** [`${{ github.sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
+
+            > This pre-release is replaced on every push to `main`. For a stable build, use a versioned release.
+
+            ### Downloads
+            | Platform | File |
+            |----------|------|
+            | macOS (x64) | `jocasta-gui-macos-x64-release.tar.gz` |
+            | Linux (x64) | `jocasta-gui-linux-x64-release.tar.gz` |
+            | Windows (x64) | `jocasta-gui-windows-clang-mingw-release.zip` |
+          prerelease: true
+          make_latest: false
+          files: release-files/*
+
+      # ── Versioned: push of a v* tag ────────────────────────────────────────
+      - name: Publish versioned release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Jocasta ${{ github.ref_name }}
+          generate_release_notes: true
+          make_latest: true
+          files: release-files/*

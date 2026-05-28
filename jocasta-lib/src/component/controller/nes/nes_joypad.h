@@ -1,0 +1,29 @@
+//
+// Created by Dave on 2/5/2024.
+//
+
+#ifndef JOCASTA_EMUS_NES_JOYPAD_H
+#define JOCASTA_EMUS_NES_JOYPAD_H
+
+#include "helpers/int.h"
+#include "helpers/physical_io.h"
+
+struct nespad_inputs {
+    nespad_inputs() = default;
+    u32 a{}, b{}, start{}, select{}, up{}, down{}, left{}, right{};
+};
+
+struct NES_joypad {
+    explicit NES_joypad(u32 joynum);
+
+    u32 counter{}, latched{}, joynum{};
+    nespad_inputs input_buffer{};
+    std::vector<physical_io_device> *devices{};
+    u32 device_index{};
+
+    void latch(u32 what);
+    u32 data();
+    static void setup_pio(physical_io_device &d, u32 num, const char*name, u32 connected);
+};
+
+#endif //JOCASTA_EMUS_NES_JOYPAD_H

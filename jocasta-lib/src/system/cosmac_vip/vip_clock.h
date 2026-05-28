@@ -1,0 +1,12 @@
+//
+// Created by . on 11/20/25.
+//
+#pragma once
+
+#include "helpers/int.h"
+
+namespace VIP {
+struct CLOCK {
+    u64 master_cycle_count{};
+};
+}
