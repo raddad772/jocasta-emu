@@ -3512,16 +3512,91 @@ void imgui_jocasta_app::render_main_menu_bar()
         }
         ImGui::Separator();
         {
-            bool vc = settings.get_show_virtual_controller_global();
-            if (ImGui::MenuItem("Virtual Controller", nullptr, vc, fsys != nullptr))
-                settings.set_show_virtual_controller_global(!vc);
-            bool vk = settings.get_show_virtual_keyboard_global();
-            if (ImGui::MenuItem("Virtual Keyboard", nullptr, vk, fsys != nullptr))
-                settings.set_show_virtual_keyboard_global(!vk);
+            // Only show virtual-input toggles for systems that actually have them.
+            bool sys_has_controller = false;
+            bool sys_has_keyboard   = false;
+            if (fsys && fsys->sys) {
+                using S = jsm::systems;
+                S k = fsys->sys->kind;
+                sys_has_keyboard =
+                    k == S::APPLEIIe         ||
+                    k == S::COMMODORE64      ||
+                    k == S::ZX_SPECTRUM_48K  ||
+                    k == S::ZX_SPECTRUM_128K ||
+                    k == S::COSMAC_VIP_2k    ||
+                    k == S::COSMAC_VIP_4k;
+                sys_has_controller =
+                    k == S::APPLEIIe         ||
+                    k == S::COMMODORE64      ||
+                    k == S::NES              ||
+                    k == S::SMS1             ||
+                    k == S::SMS2             ||
+                    k == S::GG               ||
+                    k == S::SG1000           ||
+                    k == S::ATARI2600        ||
+                    k == S::NEOGEO_AES       ||
+                    k == S::NEOGEO_MVS       ||
+                    k == S::GENESIS_USA      ||
+                    k == S::MEGADRIVE_PAL    ||
+                    k == S::GENESIS_JAP      ||
+                    k == S::DMG              ||
+                    k == S::GBC              ||
+                    k == S::GBA              ||
+                    k == S::TURBOGRAFX16     ||
+                    k == S::SNES             ||
+                    k == S::NDS              ||
+                    k == S::PS1              ||
+                    k == S::CASIO_PV1000;
+            }
+            if (sys_has_controller) {
+                bool vc = settings.get_show_virtual_controller_global();
+                if (ImGui::MenuItem("Virtual Controller", nullptr, vc))
+                    settings.set_show_virtual_controller_global(!vc);
+            }
+            if (sys_has_keyboard) {
+                bool vk = settings.get_show_virtual_keyboard_global();
+                if (ImGui::MenuItem("Virtual Keyboard", nullptr, vk))
+                    settings.set_show_virtual_keyboard_global(!vk);
+            }
         }
-        ImGui::Separator();
-        if (ImGui::MenuItem("Media (Cartridge / Disc)", nullptr, show_media_window, fsys != nullptr))
-            show_media_window = !show_media_window;
+        // One menu item per media slot — only shown when the system has media devices.
+        if (fsys && fsys->sys) {
+            auto& IOs = fsys->sys->IOs;
+            int n_cart = 0, n_disc = 0, n_cass = 0;
+            for (auto& pio : IOs) {
+                if      (pio.kind == HID_CART_PORT)     n_cart++;
+                else if (pio.kind == HID_DISC_DRIVE)     n_disc++;
+                else if (pio.kind == HID_AUDIO_CASSETTE) n_cass++;
+            }
+            if (n_cart + n_disc + n_cass > 0) {
+                ImGui::Separator();
+                int cur_cart = 0, cur_disc = 0, cur_cass = 0;
+                for (u32 i = 0; i < (u32)IOs.size(); i++) {
+                    auto& pio = IOs[i];
+                    if (pio.kind != HID_CART_PORT &&
+                        pio.kind != HID_DISC_DRIVE &&
+                        pio.kind != HID_AUDIO_CASSETTE)
+                        continue;
+                    char label[80];
+                    if (pio.kind == HID_CART_PORT) {
+                        cur_cart++;
+                        if (n_cart == 1) snprintf(label, sizeof(label), "Cartridge##mview_%u", i);
+                        else             snprintf(label, sizeof(label), "Cartridge %d##mview_%u", cur_cart, i);
+                    } else if (pio.kind == HID_DISC_DRIVE) {
+                        cur_disc++;
+                        if (n_disc == 1) snprintf(label, sizeof(label), "Disc Drive##mview_%u", i);
+                        else             snprintf(label, sizeof(label), "Disc Drive %d##mview_%u", cur_disc, i);
+                    } else {
+                        cur_cass++;
+                        if (n_cass == 1) snprintf(label, sizeof(label), "Cassette##mview_%u", i);
+                        else             snprintf(label, sizeof(label), "Cassette %d##mview_%u", cur_cass, i);
+                    }
+                    bool slot_open = show_media_slots.count(i) ? show_media_slots[i] : true;
+                    if (ImGui::MenuItem(label, nullptr, slot_open))
+                        show_media_slots[i] = !slot_open;
+                }
+            }
+        }
         if (ImGui::MenuItem("Core Options", nullptr, show_core_options, fsys != nullptr))
             show_core_options = !show_core_options;
         ImGui::Separator();
@@ -3608,12 +3683,15 @@ void imgui_jocasta_app::render_media_window()
             else             snprintf(wintitle, sizeof(wintitle), "Cassette %d###mdev_%u", cur_cass, i);
         }
 
-        // Always-open window (nullptr p_open = no close button)
+        bool slot_open = show_media_slots.count(i) ? show_media_slots[i] : true;
+        if (!slot_open) continue;
+
         ImGui::SetNextWindowPos(ImVec2(10.0f, 30.0f + media_idx * 175.0f), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(360, 0), ImGuiCond_Appearing);
         media_idx++;
-        if (!ImGui::Begin(wintitle, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!ImGui::Begin(wintitle, &slot_open, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::End();
+            show_media_slots[i] = slot_open;
             continue;
         }
 
@@ -3798,6 +3876,7 @@ void imgui_jocasta_app::render_media_window()
         }
 
         ImGui::End();
+        show_media_slots[i] = slot_open;
     }
 }
 
@@ -4673,8 +4752,7 @@ void imgui_jocasta_app::mainloop(ImGuiIO& io) {
 
         if (show_core_options)
             render_opt_view(fsys, settings, AppSettings::sys_to_core_key(which), &show_core_options);
-        if (show_media_window)
-            render_media_window();
+        render_media_window();
         render_debug_views(io, update_dasm_scroll, end_fv.master_cycle);
     }
 

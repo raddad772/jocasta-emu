@@ -3,6 +3,7 @@
 #include <array>
 #include <memory>
 #include <string>
+#include <unordered_map>
 
 #include "full_sys.h"
 #include "helpers/int.h"
@@ -106,7 +107,7 @@ struct imgui_jocasta_app {
     bool show_save_manager = false;
     bool show_window_manager = false;
     bool fullscreen_mode = false;
-    bool show_media_window = true;
+    std::unordered_map<u32, bool> show_media_slots; // key = IO index; absent = visible
     bool show_core_options = true;
     int settings_nav = 0; // 0=General, 1=BIOS, 2=Hotkeys, 3=Input, 4=Options, 5=In Development
     bool pending_dev_features_enable = false; // waiting for user to confirm warning modal
