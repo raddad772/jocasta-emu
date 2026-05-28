@@ -160,7 +160,15 @@ u32 core::read(GBA::core *gba, u32 addr, u8 access) {
     }
     th->prefetch.duty_cycle = gba->waitstates.timing16[1][page];
     th->prefetch.next_addr = addr + sz;
-    th->prefetch.last_access = tt + outcycles;
+    // For non-code (data) reads the prefetch has been fully stopped and must not
+    // restart. Setting the sentinel prevents any subsequent I-cycles from being
+    // counted as banked prefetch time, which would otherwise trigger a spurious
+    // one-cycle penalty on the very next code fetch (duty=2 case).
+    if (access & ARM32P_code) {
+        th->prefetch.last_access = tt + outcycles;
+    } else {
+        th->prefetch.last_access = 0xFFFFFFFFFFFFFFFFULL;
+    }
     gba->waitstates.current_transaction += outcycles;
 
     if constexpr(sz == 1) return reinterpret_cast<u8 *>(th->ROM.ptr)[addr];
