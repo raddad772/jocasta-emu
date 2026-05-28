@@ -327,6 +327,7 @@ THUMBIs(LDR_PC_relative)
     pipeline.access = ARM32P_nonsequential | ARM32P_code;
     u32 *Rd = regmap[ins.Rd];
     *Rd = read<4, do_debug>(addr, ARM32P_nonsequential);
+    if constexpr (is_ARM7x) idle(1);
     return false;
 }
 
@@ -340,6 +341,7 @@ THUMBIs(LDRH_STRH_reg_offset)
     pipeline.access = ARM32P_nonsequential | ARM32P_code;
     if constexpr (L) { // load
         u32 v = read<2, do_debug>(addr, ARM32P_nonsequential);
+        if constexpr (is_ARM7x) idle(1);
         if (addr & 1) v = (v >> 8) | (v << 24);
         *Rd = v;
     }
@@ -363,11 +365,13 @@ THUMBIs(LDRSH_LDRSB_reg_offset)
     u32 v;
     if constexpr (B) {
         v = read<1, do_debug>(addr, ARM32P_nonsequential) & 0xFF;
+        if constexpr (is_ARM7x) idle(1);
         v = sign_extend<8>(v);
     }
     else {
         v = read<2, do_debug>(addr, ARM32P_nonsequential) & 0xFFFF;
         if constexpr (is_ARM7x) {
+            idle(1);
             if (addr & 1) { v = (v >> 8); v = sign_extend<8>(v); }
             else v = sign_extend<16>(v);
         }
@@ -387,6 +391,7 @@ THUMBIs(LDR_STR_reg_offset)
     u32 *Rd = regmap[ins.Rd];
     if constexpr (L) { // Load
         u32 v = read<4, do_debug>(addr, ARM32P_nonsequential);
+        if constexpr (is_ARM7x) idle(1);
         if (addr & 3) v = align_val(addr, v);
         *Rd = v;
     }
@@ -405,7 +410,9 @@ THUMBIs(LDRB_STRB_reg_offset)
     u32 *Rd = regmap[ins.Rd];
     pipeline.access = ARM32P_nonsequential | ARM32P_code;
     if constexpr (L) { // Load
-        *Rd = read<1, do_debug>(addr, ARM32P_nonsequential);
+        const u32 v = read<1, do_debug>(addr, ARM32P_nonsequential);
+        if constexpr (is_ARM7x) idle(1);
+        *Rd = v;
     }
     else { // Store
         write<1, do_debug, cached>(addr, ARM32P_nonsequential, (*Rd) & 0xFF);
@@ -423,6 +430,7 @@ THUMBIs(LDR_STR_imm_offset)
     u32 *Rd = regmap[ins.Rd];
     if constexpr (L) { // Load
         u32 v = read<4, do_debug>(addr, ARM32P_nonsequential);
+        if constexpr (is_ARM7x) idle(1);
         if (addr & 3) v = align_val(addr, v);
         *Rd = v;
     }
@@ -442,6 +450,7 @@ THUMBIs(LDRB_STRB_imm_offset)
     pipeline.access = ARM32P_nonsequential | ARM32P_code;
     if constexpr (L) { // load
         const u32 v = read<1, do_debug>(addr, ARM32P_nonsequential);
+        if constexpr (is_ARM7x) idle(1);
         *Rd = v;
     }
     else { // store
@@ -460,6 +469,7 @@ THUMBIs(LDRH_STRH_imm_offset)
     pipeline.access = ARM32P_nonsequential | ARM32P_code;
     if constexpr (L) { // load
         u32 v = read<2, do_debug>(addr, ARM32P_nonsequential);
+        if constexpr (is_ARM7x) idle(1);
         if (addr & 1) v = (v >> 8) | (v << 24);
         *Rd = v;
     }
@@ -478,6 +488,7 @@ THUMBIs(LDR_STR_SP_relative)
     pipeline.access = ARM32P_nonsequential | ARM32P_code;
     if constexpr (L) { // if Load
         u32 v = read<4, do_debug>(addr, ARM32P_nonsequential);
+        if constexpr (is_ARM7x) idle(1);
         if (addr & 3) v = align_val(addr, v);
         *regmap[ins.Rd] = v;
     }

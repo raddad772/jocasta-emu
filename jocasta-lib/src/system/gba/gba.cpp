@@ -212,6 +212,23 @@ Host  sp_svc    sp_irq    sp_svc    zerofilled area       return address
 
     cpu.regs.R[15] = 0x08000000;
     cpu.reload_pipeline<false, false>();
+
+    // The GBA BIOS initializes WAITCNT = 0x4317 before jumping to the cartridge.
+    // Reproduce that here so timing is correct in fast-boot mode.
+    // Low byte 0x17: SRAM=3(9cyc), WS0 N=1(4cyc), WS0 S=1(2cyc), WS1 N=0, WS1 S=0
+    // High byte 0x43: WS2 N=3(9cyc), WS2 S=0, PHI=0, prefetch=1
+    waitstates.io.sram    = 3;
+    waitstates.io.ws0_n   = 1;
+    waitstates.io.ws0_s   = 1;
+    waitstates.io.ws1_n   = 0;
+    waitstates.io.ws1_s   = 0;
+    waitstates.io.ws2_n   = 3;
+    waitstates.io.ws2_s   = 0;
+    waitstates.io.phi_term  = 0;
+    waitstates.io.empty_bit = 0;
+    set_waitstates();
+    cart.prefetch.enable = true;
+    enable_prefetch();
 }
 
 static void tick_APU(void *ptr, u64 key, u64 clock, u32 jitter)

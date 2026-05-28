@@ -39,11 +39,11 @@ private:
     void clock_pulse(u32 pc);
 
 public:
-    u32 ext_enable=1;
+    bool ext_enable=1;
     
     struct NESSNDCHAN {
         NESSNDCHAN() = default;
-        u32 ext_enable=1;
+        bool ext_enable=1;
         u32 number=0;
         i32 output=0;
 
@@ -97,7 +97,7 @@ public:
 
     struct {
         i32 bytes_remaining{};
-        u32 ext_enable=1;
+        bool ext_enable=1;
         u32 enabled{};
 
         u32 IF{}, new_IF{};

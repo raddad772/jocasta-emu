@@ -161,6 +161,7 @@ ARMi(LDRH_STRH)
             else
                 *Rn = addr;
         }
+        if constexpr (is_ARM7x) idle(1);
         *Rd = val;
         flush |= (Rdd == 15);
         if (flush) reload_pipeline<do_debug, false>();
@@ -232,6 +233,7 @@ ARMi(LDRSB_LDRSH)
         else
             *Rn = addr;
     }
+    if constexpr (is_ARM7x) idle(1);
     *Rd = val;
     flush |= (Rdd == 15);
     if (flush) reload_pipeline<do_debug, false>();
@@ -288,7 +290,7 @@ ARMi(MSR_reg)
         }
         cycles = 2;
     }
-    if (cycles) idle(cycles);
+    if constexpr (!is_ARM7x) { if (cycles) idle(cycles); }
     pipeline.access = ARM32P_sequential | ARM32P_code;
     regs.PC += 4;
 }
@@ -328,7 +330,7 @@ ARMi(MSR_imm)
         }
         cycles = 2;
     }
-    if (cycles) idle(cycles);
+    if constexpr (!is_ARM7x) { if (cycles) idle(cycles); }
     regs.PC += 4;
     pipeline.access = ARM32P_sequential | ARM32P_code;
 }
@@ -636,14 +638,14 @@ ARMi(LDR_STR_immediate_offset)
             else
                 *Rn = addr;
         }
-        *Rd = v;
-
         if constexpr (is_ARM7x) {
             idle(1);
+            *Rd = v;
             flush |= Rdd == 15;
             if (flush) reload_pipeline<do_debug, false>();
         }
         else {
+            *Rd = v;
             if (Rdd == 15) {
                 regs.CPSR.T = regs.PC & 1;
                 reload_pipeline<do_debug, false>();
@@ -721,9 +723,19 @@ ARMi(LDR_STR_register_offset)
             else
                 *Rn = addr;
         }
-        flush |= Rdd == 15;
-        *Rd = v;
-        if (flush) reload_pipeline<do_debug, false>();
+        if constexpr (is_ARM7x) {
+            idle(1);
+            *Rd = v;
+            flush |= Rdd == 15;
+            if (flush) reload_pipeline<do_debug, false>();
+        }
+        else {
+            *Rd = v;
+            if (Rdd == 15) {
+                regs.CPSR.T = regs.PC & 1;
+                reload_pipeline<do_debug, false>();
+            }
+        }
     }
     else { // STR to RAM
         if (B) AWRITE(addr, 1, *Rd);

@@ -115,7 +115,7 @@ public:
         u32 next_addr{};
         u32 duty_cycle{};
         u64 last_access{};
-        bool enable{true};
+        bool enable{false};
         bool was_disabled{};
     } prefetch{};
 };

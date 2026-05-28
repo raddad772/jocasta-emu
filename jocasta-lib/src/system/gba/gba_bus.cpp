@@ -306,7 +306,7 @@ void core::set_waitstates() {
 #define WS0 (0x8+i)
 #define WS1 (0xA+i)
 #define WS2 (0xC+i)
-    for (u32 i = 0; i < 1; i++) {
+    for (u32 i = 0; i < 2; i++) {
         t16[0][WS0] = nonseq[waitstates.io.ws0_n];
         t16[0][WS1] = nonseq[waitstates.io.ws1_n];
         t16[0][WS2] = nonseq[waitstates.io.ws2_n];

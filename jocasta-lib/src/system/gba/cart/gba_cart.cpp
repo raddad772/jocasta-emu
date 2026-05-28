@@ -65,6 +65,12 @@ u32 core::read(GBA::core *gba, u32 addr, u8 access) {
 
     u32 sequential = (access & ARM32P_sequential);
     if ((addr & 0x1FFFF) == 0) sequential = 0; // 128KB blocks are non-sequential
+    // First ROM access after the prefetch buffer was disabled must be non-sequential,
+    // because the buffer contents are now stale and the pipeline was broken.
+    if (th->prefetch.was_disabled) {
+        sequential = 0;
+        th->prefetch.was_disabled = false;
+    }
     // determine cycles of this access
     if constexpr (do_debug) {
         if (dbg.do_debug) {

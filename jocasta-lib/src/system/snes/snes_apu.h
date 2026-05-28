@@ -127,7 +127,7 @@ struct DSP {
     APU::core *apu;
     //core *snes;
 
-    u32 ext_enable{};
+    bool ext_enable{};
     ch channel[8];
 
     struct {
