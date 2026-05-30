@@ -495,7 +495,7 @@ void core<cpukind, scheduler_kind>::reload_pipeline_ARM() {
         (*waitstates) += ins_timing32(ins_timing_ptr, regs.PC, ARM32P_code | ARM32P_nonsequential);
         regs.PC += 4;
         pipeline.access = ARM32P_code | ARM32P_sequential;
-        (*waitstates) += ins_timing16(ins_timing_ptr, regs.PC, pipeline.access);
+        (*waitstates) += ins_timing32(ins_timing_ptr, regs.PC, pipeline.access);
         regs.PC += 4;
         return;
     }

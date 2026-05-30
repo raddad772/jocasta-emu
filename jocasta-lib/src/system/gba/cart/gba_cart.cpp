@@ -27,21 +27,38 @@ MT_IW32(GBA::core, write);
 MT_IW32(GBA::core, write_sram);
 
 
-bool core::prefetch_stop() const {
-    // So we need to cover a few cases here...
-    // "If ROM data/SRAM/FLASH is accessed in a cycle, where the prefetch unit
-    //  is active and finishing a half-word access, then a one-cycle penalty applies."
-    if (prefetch.enable) {
-        u32 page = gba->cpu.regs.R[15] >> 24;
-        if ((page >= 8) && (page < 0xE) && (prefetch.cycles_banked > 0)) {
-            // OK so we have cycles-banked that can be up to 8* what it should compare to
-            u32 cb = prefetch.cycles_banked % prefetch.duty_cycle;
-            if (cb == (prefetch.duty_cycle - 1)) { // ABOUT to finish
-                return true;
-            }
-        }
+// Returns 1 if a data/SRAM access catches the in-flight half-word exactly one
+// cycle from completing (the "ROM access during prefetch" penalty). Caller must
+// advance the sim to the current clock before calling.
+u32 core::prefetch_penalty() const {
+    return prefetch.enable && prefetch.active && !prefetch.was_filled && prefetch.countdown == 1 ? 1u : 0u;
+}
+
+// Tick the prefetch unit `clocks` cycles (NBA-style countdown subtraction).
+// Each time the countdown expires a half-word is loaded (fetch += 2) and the
+// timer reloads to S. Stops early if the buffer fills (was_filled = true).
+void core::prefetch_tick(i32 clocks, i32 S) {
+    auto &pf = prefetch;
+    if (S <= 0 || clocks <= 0 || pf.was_filled) return;
+    pf.active = true;
+    pf.countdown -= clocks;
+    while (pf.countdown <= 0) {
+        if (static_cast<i32>(pf.fetch - pf.head) >= 16) { pf.was_filled = true; return; }
+        pf.fetch += 2;
+        pf.countdown += S;
     }
-    return false;
+}
+
+// Advance the unit over idle cycles elapsed since it was last advanced.
+// A full or disabled unit does not advance.
+void core::prefetch_sim_advance(u64 now) {
+    auto &pf = prefetch;
+    i64 clocks = static_cast<i64>(now) - static_cast<i64>(pf.pf_clock);
+    pf.pf_clock = now;
+    if (clocks <= 0 || !pf.enable || pf.was_filled) return;
+    u32 page = gba->cpu.regs.R[15] >> 24;
+    if (page < 8 || page >= 0xE) return;
+    prefetch_tick(static_cast<i32>(clocks), static_cast<i32>(gba->waitstates.timing16[1][page]));
 }
 
 template<u8 sz, bool do_debug, bool peek>
@@ -56,11 +73,20 @@ u32 core::read(GBA::core *gba, u32 addr, u8 access) {
     addr &= 0x01FF'FFFF;
 
     if (addr >= th->ROM.size) { // OOB read
-        gba->waitstates.current_transaction++;
+        if constexpr (!peek) gba->waitstates.current_transaction++;
         if (sz == 4) {
             return ((addr >> 1) & 0xFFFF) | ((((addr >> 1) + 1) & 0xFFFF) << 16);
         }
         return (addr >> 1) & masksz[sz];
+    }
+
+    // Peek reads (used by the cached-interpreter compiler to inspect ROM bytes)
+    // must not touch any timing or prefetch state.
+    if constexpr (peek) {
+        if constexpr(sz == 1) return reinterpret_cast<u8 *>(th->ROM.ptr)[addr];
+        if constexpr(sz == 2) return reinterpret_cast<u16 *>(th->ROM.ptr)[addr >> 1];
+        if constexpr(sz == 4) return reinterpret_cast<u32 *>(th->ROM.ptr)[addr >> 2];
+        NOGOHERE;
     }
 
     u32 sequential = (access & ARM32P_sequential);
@@ -87,8 +113,7 @@ u32 core::read(GBA::core *gba, u32 addr, u8 access) {
     }
     u32 outcycles = 0;
     if (!th->prefetch.enable) {
-        // Just do a normal read
-        outcycles = th->prefetch_stop();
+        outcycles = th->prefetch_penalty();
         if (sz == 4) outcycles += gba->waitstates.timing32[sequential][page];
         else outcycles += gba->waitstates.timing16[sequential][page];
         gba->waitstates.current_transaction += outcycles;
@@ -98,82 +123,55 @@ u32 core::read(GBA::core *gba, u32 addr, u8 access) {
         NOGOHERE;
     }
 
-    // If we got here, prefetch is enabled.
     const i64 tt = static_cast<i64>(gba->clock_current());
-    i64 this_cycles = (sz == 4) ? gba->waitstates.timing32[1][page] : gba->waitstates.timing16[1][page];
-    // If we are at the next prefetch addr, and it's code...
-    if (th->prefetch.last_access != 0xFFFFFFFFFFFFFFFF)
-        th->prefetch.cycles_banked += (tt - static_cast<i64>(th->prefetch.last_access));
-    // Cap at 8 halfwords (16 bytes) regardless of access size. For ARM sz=4,
-    // this_cycles = timing32 = 2*timing16, so *8 would give 16 ARM words — too much.
-    // Always use timing16[1] * 8 so the limit is 8 halfwords for both modes.
-    i64 max_banked = static_cast<i64>(gba->waitstates.timing16[1][page]) * 8;
-    if (th->prefetch.cycles_banked > max_banked) {
-        th->prefetch.cycles_banked = max_banked;
-    }
+    const u32 full_addr = (page << 24) | addr;
+    const i32 S = static_cast<i32>(gba->waitstates.timing16[1][page]);  // sequential half-word
+    const i32 N = static_cast<i32>(gba->waitstates.timing16[0][page]);  // non-sequential half-word
+    auto &pf = th->prefetch;
 
-    if (addr == th->prefetch.next_addr && (access & ARM32P_code)) {
-        // Subtract # of cycles of this access
-        th->prefetch.cycles_banked -= this_cycles;
-        // if we don't have enough...
-        if (th->prefetch.cycles_banked < 0) {
-            if constexpr (do_debug) {
-                if (::dbg.do_debug) {
-                    trace_view *tv = gba->cpu.dbg.tvptr;
-                    if (tv) {
-                        tv->startline(3);
-                        tv->printf(0, "ifetch");
-                        tv->printf(1, "%lld", gba->clock.master_cycle_count + gba->waitstates.current_transaction);
-                        tv->printf(2, "%08x", addr);
-                        tv->printf(4, "partial complete. cycles left: %d", (0 - th->prefetch.cycles_banked));
-                        tv->endline();
-                    }
-                }
+    th->prefetch_sim_advance(static_cast<u64>(tt));
+
+    outcycles = 0;
+    const bool is_code = (access & ARM32P_code) != 0;
+    const u32 halfwords = (sz == 4) ? 2u : 1u;
+
+    if (is_code && full_addr == pf.head) {
+        // Sequential code fetch: consume from the buffer (or wait for in-flight).
+        outcycles += 1;
+        th->prefetch_tick(1, S);
+        for (u32 h = 0; h < halfwords; h++) {
+            if (pf.was_filled && pf.head == pf.fetch) { pf.was_filled = false; pf.countdown = N; }
+            if (pf.head == pf.fetch) {                  // buffer empty: wait for in-flight half-word
+                outcycles += static_cast<u32>(pf.countdown);
+                th->prefetch_tick(pf.countdown, S);
             }
-            // Add what we have left to the wait
-            outcycles += (0 - th->prefetch.cycles_banked);
-            // Reset cycles banked to 0
-            th->prefetch.cycles_banked = 0;
-        } else { // if we DO have enough...
-            outcycles++; // transaction only takes 1 cycle!
-            //if (prefetch.cycles_banked > (prefetch.duty_cycle * 8)) { // We can only get ahead 8 times
-            //    prefetch.cycles_banked = prefetch.duty_cycle * 8;
-            //}
+            pf.head += 2;
         }
-    }
-    else { // Check for another case: fetch is tried of the currently-in-progress fetch
-        // First calculate what the current in-progress fetch is
-        u32 current_fetch_addr = th->prefetch.next_addr;
-        u32 duty_cycle = gba->waitstates.timing16[1][page];
-        if constexpr (sz == 4) duty_cycle *= 2;
-
-        u32 fetch_cycles = th->prefetch.cycles_banked / duty_cycle;
-        current_fetch_addr += (fetch_cycles * sz);
-        if (addr == current_fetch_addr && (access & ARM32P_code) && (fetch_cycles > 0)) {
-            //printf("\nI HIT THE CASE...");
-            // cycles_banked % duty_cycle is elapsed time within the current fetch.
-            // We need remaining = duty_cycle - elapsed, not elapsed itself.
-            u32 cycles_elapsed = th->prefetch.cycles_banked % duty_cycle;
-            outcycles += (duty_cycle - cycles_elapsed);
-            th->prefetch.cycles_banked = 0;
-        }
-        else { // Abort the prefetcher
-            outcycles += th->prefetch_stop(); // Penalty if we're 1 from end!
-            th->prefetch.cycles_banked = 0; // Restart prefetches
-            outcycles += (sz == 4) ? gba->waitstates.timing32[sequential][page] : gba->waitstates.timing16[sequential][page];; // Full cost of the read
-        }
-    }
-    th->prefetch.duty_cycle = gba->waitstates.timing16[1][page];
-    th->prefetch.next_addr = addr + sz;
-    // For non-code (data) reads the prefetch has been fully stopped and must not
-    // restart. Setting the sentinel prevents any subsequent I-cycles from being
-    // counted as banked prefetch time, which would otherwise trigger a spurious
-    // one-cycle penalty on the very next code fetch (duty=2 case).
-    if (access & ARM32P_code) {
-        th->prefetch.last_access = tt + outcycles;
     } else {
-        th->prefetch.last_access = 0xFFFFFFFFFFFFFFFFULL;
+        // Code branch/miss or ROM data read: penalty if in-flight half-word is 1 cycle from done.
+        outcycles += th->prefetch_penalty();
+        if (is_code) {
+            // prefetchSync: reset unit to fetch ahead from the new PC
+            pf.head = pf.fetch = full_addr + sz;
+            pf.countdown = S;
+            pf.was_filled = false;
+            pf.active = false;
+        } else {
+            // prefetchReset: data read flushes the unit entirely
+            pf.head = pf.fetch = 0;
+            pf.countdown = 0;
+            pf.was_filled = true;
+            pf.active = false;
+        }
+        i32 first = sequential ? S : N;
+        outcycles += (sz == 4) ? static_cast<u32>(first + S) : static_cast<u32>(first);
     }
+
+    // Mark the unit advanced up to this access's completion so the next
+    // elapsed-advance starts after the cost (a stopped unit stays put).
+    pf.pf_clock = static_cast<u64>(tt + outcycles);
+    pf.duty = S;
+
     gba->waitstates.current_transaction += outcycles;
 
     if constexpr(sz == 1) return reinterpret_cast<u8 *>(th->ROM.ptr)[addr];
@@ -199,10 +197,7 @@ u32 core::read_sram(GBA::core *gba, u32 addr, u8 access)
     if constexpr (sz == 4) {
         v *= 0x1010101;
     }
-    // SRAM/FLASH access stops the prefetch buffer (same as any non-ROM access).
-    gba->waitstates.current_transaction += th->prefetch_stop();
-    th->prefetch.cycles_banked = 0;
-    th->prefetch.last_access = 0xFFFFFFFFFFFFFFFFULL;
+    gba->waitstates.current_transaction += th->prefetch_penalty();
     gba->waitstates.current_transaction += gba->waitstates.sram;
     return v;
 }
@@ -225,10 +220,27 @@ void core::write(GBA::core *gba, u32 addr, u8 access, u32 val)
         //printf("\nWrite EEPROM addr:%08x  sz:%d  val:%02x", addr, sz, val);
         return th->write_eeprom(addr, sz, access, val);
     }
-    gba->waitstates.current_transaction++;
-    gba->waitstates.current_transaction += th->prefetch_stop();
-    th->prefetch.cycles_banked = 0;
-    printf("\nWARNING write cart addr %08x", addr);
+    u32 page = addr >> 24;
+    auto &pf = th->prefetch;
+    u32 outcycles = 0;
+    if (pf.enable && page >= 8 && page < 0xE) {
+        const i64 tt = static_cast<i64>(gba->clock_current());
+        const i32 S = static_cast<i32>(gba->waitstates.timing16[1][page]);
+        const i32 N = static_cast<i32>(gba->waitstates.timing16[0][page]);
+        th->prefetch_sim_advance(static_cast<u64>(tt));
+        outcycles += th->prefetch_penalty();
+        pf.head = pf.fetch = 0; pf.countdown = 0; pf.was_filled = true; pf.active = false;
+        u32 seq = (access & ARM32P_sequential);
+        if ((addr & 0x1FFFF) == 0) seq = 0;
+        i32 first = seq ? S : N;
+        outcycles += (sz == 4) ? static_cast<u32>(first + S) : static_cast<u32>(first);
+        pf.pf_clock = static_cast<u64>(tt + outcycles);
+        pf.duty = S;
+        gba->waitstates.current_transaction += outcycles;
+    } else {
+        outcycles = (sz == 4) ? gba->waitstates.timing32[0][page] : gba->waitstates.timing16[0][page];
+        gba->waitstates.current_transaction += outcycles;
+    }
 }
 
 template<u8 sz, bool do_debug>
@@ -248,10 +260,7 @@ void core::write_sram(GBA::core *gba, u32 addr, u8 access, u32 val)
     }
     val &= 0xFF;
     static_cast<u8 *>(th->RAM.store->data)[addr & th->RAM.mask] = val;
-    // SRAM/FLASH write also stops the prefetch buffer.
-    gba->waitstates.current_transaction += th->prefetch_stop();
-    th->prefetch.cycles_banked = 0;
-    th->prefetch.last_access = 0xFFFFFFFFFFFFFFFFULL;
+    gba->waitstates.current_transaction += th->prefetch_penalty();
     gba->waitstates.current_transaction += gba->waitstates.sram;
     th->RAM.store->dirty = true;
 }

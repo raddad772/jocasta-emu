@@ -37,7 +37,79 @@ template u32 core::ins_timing<2>(u32 addr, u8 access);
 template u32 core::ins_timing<4>(u32 addr, u8 access);
 
 template<u8 sz> u32 core::ins_timing(u32 addr, u8 access) {
-    // TODO: this. for cached interpreter
+    // Return the cycle cost of an instruction fetch at `addr` and advance the
+    // prefetch unit, mirroring exactly what the regular interpreter does when
+    // fetch_ins() calls through the bus. This is used by the cached interpreter
+    // which bypasses the normal bus path for instruction fetches.
+    u32 page = addr >> 24;
+
+    // Non-ROM regions: fixed costs matching their busrd handlers.
+    // NOTE: ins_timing must NOT add to current_transaction — the cached
+    // interpreter does (*waitstates) += ins_timing(...) itself.
+    switch (page) {
+        case 0x00: case 0x01:  // BIOS
+            return 1;
+        case 0x02:  // EWRAM (slow): 3 cycles (16-bit), 6 cycles (32-bit)
+            if constexpr (sz == 4) return 6;
+            else                   return 3;
+        case 0x03:  // IWRAM (fast)
+            return 1;
+        case 0x04: case 0x05: case 0x06: case 0x07:  // IO/PPU
+            return 1;
+        default: break;
+    }
+
+    // ROM (0x08..0x0D).
+    if (page >= 0x08 && page < 0x0E) {
+        const i32 S = static_cast<i32>(waitstates.timing16[1][page]);
+        const i32 N = static_cast<i32>(waitstates.timing16[0][page]);
+        const u32 full_addr = addr;
+        auto &pf = cart.prefetch;
+
+        // Prefetch disabled: straight ROM timing, no state changes.
+        if (!pf.enable) {
+            u32 seq = access & ARM32P_sequential;
+            if ((addr & 0x1FFFF) == 0) seq = 0;
+            if constexpr (sz == 4) return seq ? static_cast<u32>(S + S) : static_cast<u32>(N + S);
+            else                   return seq ? static_cast<u32>(S)     : static_cast<u32>(N);
+        }
+
+        // Prefetch enabled: run through the sim (same as is_code path in gba_cart.cpp).
+        const i64 tt = static_cast<i64>(clock_current());
+        const u32 halfwords = (sz == 4) ? 2u : 1u;
+        u32 cost = 0;
+
+        cart.prefetch_sim_advance(static_cast<u64>(tt));
+
+        if (full_addr == pf.head && (pf.fetch != pf.head || pf.active)) {
+            // Buffer hit: consume from the buffer (or wait for in-flight half-word).
+            cost += 1;
+            cart.prefetch_tick(1, S);
+            for (u32 h = 0; h < halfwords; h++) {
+                if (pf.was_filled && pf.head == pf.fetch) { pf.was_filled = false; pf.countdown = N; }
+                if (pf.head == pf.fetch) {
+                    cost += static_cast<u32>(pf.countdown);
+                    cart.prefetch_tick(pf.countdown, S);
+                }
+                pf.head += 2;
+            }
+        } else {
+            // Miss (branch target / non-sequential): prefetchSync.
+            i32 first = (access & ARM32P_sequential) ? S : N;
+            cost += (sz == 4) ? static_cast<u32>(first + S) : static_cast<u32>(first);
+            pf.head = pf.fetch = full_addr + sz;
+            pf.countdown = S;
+            pf.was_filled = false;
+            pf.active = false;
+        }
+
+        pf.pf_clock = static_cast<u64>(tt + cost);
+        pf.duty = S;
+        // Do NOT add to current_transaction — caller does (*waitstates) += return value.
+        return cost;
+    }
+
+    // Fallback (open bus, unmapped): 1 cycle.
     return 1;
 }
 
@@ -51,6 +123,7 @@ static void* get_cached_block_thnk(void *ptr, u32 addr) {
         case 0x00: // BIOS
             addr &= 0x3FFE;
             bl = &th->BIOS_store[addr >> 1];
+            break;
         case 0x02: // EWRAM 256kb
             addr &= 0x3'FFFE;
             bl = th->EWRAM_cache.get_block<0>(addr, 1);
@@ -156,6 +229,7 @@ mem.write_debug[0][addr] = wfunc<1, true>; mem.write_debug[1][addr] = wfunc<2, t
     cpu.read_ptr = this;
     cpu.write_ptr = this;
     cpu.fetch_ptr = this;
+    cpu.ins_timing_ptr = this;
     cpu.read_func8 = &mainbus_read<1, false, false>;
     cpu.read_func16 = &mainbus_read<2, false, false>;
     cpu.read_func32 = &mainbus_read<4, false, false>;
@@ -222,7 +296,9 @@ void core::buswr_invalid(core *th, u32 addr, u8 access, u32 val) {
 
 template<u8 sz, bool do_debug, bool peek>
 u32 core::busrd_bios(core *th, u32 addr, u8 access) {
-    if constexpr (!peek) th->waitstates.current_transaction++;
+    if constexpr (!peek) {
+        th->waitstates.current_transaction++;
+    }
     if (addr < 0x4000) {
         if (th->cpu.regs.R[15] < 0x4000) {
             //const u32 v = cR[sz](th->BIOS.data, addr);
@@ -566,16 +642,14 @@ void core::eval_irqs()
 
 void core::enable_prefetch()
 {
-    u32 page = cpu.regs.R[15] >> 24;  // was >> 28: gave page=0 for all ROM addresses
-    if ((page < 8) || (page >= 0xE)) { // PC not in ROM — prefetch can't run yet
-        cart.prefetch.last_access = 0xFFFFFFFFFFFFFFFF;
-    }
-    else {
-        cart.prefetch.last_access = clock_current();
-    }
-    cart.prefetch.cycles_banked = 0;
-    cart.prefetch.next_addr = cpu.regs.R[15];
-    cart.prefetch.duty_cycle = waitstates.timing16[1][page];  // was [0]: must use S-cycle, not N-cycle
+    u32 page = cpu.regs.R[15] >> 24;
+    cart.prefetch.duty = waitstates.timing16[1][page];
+    // Reset sim state so the first code fetch after enable is a miss.
+    cart.prefetch.head = cart.prefetch.fetch = 0;
+    cart.prefetch.countdown = 0;
+    cart.prefetch.was_filled = true;
+    cart.prefetch.active = false;
+    cart.prefetch.pf_clock = clock_current();
 }
 
 static constexpr u8 hipri[16] = {

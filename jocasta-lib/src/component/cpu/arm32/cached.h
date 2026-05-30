@@ -127,7 +127,8 @@ void core<cpukind, scheduler_kind>::execute_cached_block(cached_block_t *block) 
         }
         regs.PC &= 0xFFFFFFFE;
         if constexpr(is_THUMB) {
-            // Emulate instruction fetch
+            // Emulate instruction fetch: time the prefetch-stage fetch at regs.PC
+            // (2 instructions ahead of execute), before this instruction runs.
             (*waitstates) += ins_timing16(ins_timing_ptr, regs.PC, pipeline.access);
 
             bool branch_taken;
@@ -142,7 +143,8 @@ void core<cpukind, scheduler_kind>::execute_cached_block(cached_block_t *block) 
             }
         }
         else {
-            // Emulate instruction fetch
+            // Emulate instruction fetch: time the prefetch-stage fetch at regs.PC
+            // (2 instructions ahead of execute), before this instruction runs.
             (*waitstates) += ins_timing32(ins_timing_ptr, regs.PC, pipeline.access);
             if (condition_passes(current_ins->cc)) {
                 bool branch_taken;

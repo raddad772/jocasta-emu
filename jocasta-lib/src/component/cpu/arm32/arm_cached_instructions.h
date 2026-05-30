@@ -192,6 +192,7 @@ ARMIs(LDRH_STRH)
                     *Rn = addr;
             }
         }
+        if constexpr (is_ARM7x) idle(1);
         flushed |= ins.Rdd == 15;
         *Rd = val;
         if (flushed) {
@@ -265,6 +266,7 @@ ARMIs(LDRSB_LDRSH)
             flush = ins.Rnd == 15;
         }
     }
+    if constexpr (is_ARM7x) idle(1);
     *Rd = val;
     flush |= ins.Rdd == 15;
     if (flush) {
@@ -317,14 +319,14 @@ ARMIs(MSR_reg) {
         if (mask & 0x0F) {
             fill_regmap();
         }
-        if constexpr (do_idle) idle(2);
+        if constexpr (!is_ARM7x) { if constexpr (do_idle) idle(2); }
     }
     else {
         if ((regs.CPSR.mode != M_user) && (regs.CPSR.mode != M_system)) {
             u32 *v = get_SPSR_by_mode();
             *v = (~mask & *v) | (imm & mask);
         }
-        idle(2);
+        if constexpr (!is_ARM7x) idle(2);
     }
     pipeline.access = ARM32P_sequential | ARM32P_code;
     regs.PC += 4;
@@ -355,14 +357,14 @@ ARMIs(MSR_imm) {
         if (mask & 0x0F) {
             fill_regmap();
         }
-        if constexpr(do_idle) idle(2);
+        if constexpr (!is_ARM7x) { if constexpr(do_idle) idle(2); }
     }
     else {
         if ((regs.CPSR.mode != M_user) && (regs.CPSR.mode != M_system)) {
             u32 *v = get_SPSR_by_mode();
             *v = (~mask & *v) | (imm & mask);
         }
-        idle(2);
+        if constexpr (!is_ARM7x) idle(2);
     }
     regs.PC += 4;
     pipeline.access = ARM32P_sequential | ARM32P_code;
@@ -628,6 +630,7 @@ ARMIs(LDR_STR_register_offset) {
             else
                 *Rn = addr;
         }
+        if constexpr (is_ARM7x) idle(1);
         flush |= ins.Rdd == 15;
         *Rd = v;
         if (flush) {

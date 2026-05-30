@@ -74,7 +74,9 @@ struct core {
     GBA::core *gba;
     BUF ROM{};
     u32 last_read{};
-    bool prefetch_stop() const;
+    u32 prefetch_penalty() const;
+    void prefetch_sim_advance(u64 now);
+    void prefetch_tick(i32 clocks, i32 S);
     template<u8 sz, bool do_debug> static void write(GBA::core *gba, u32 addr, u8 access, u32 val);
     template<u8 sz, bool do_debug, bool peek> static u32 read_sram(GBA::core *gba, u32 addr, u8 access);
     template<u8 sz, bool do_debug> static void write_sram(GBA::core *gba, u32 addr, u8 access, u32 val);
@@ -111,12 +113,23 @@ public:
     } RTC{};
 
     struct {
-        i64 cycles_banked{};
-        u32 next_addr{};
-        u32 duty_cycle{};
-        u64 last_access{};
         bool enable{false};
         bool was_disabled{};
+        // Lazy sim state (see prefetch_sim_advance / prefetch_tick).
+        // head  = next address the CPU will consume from the buffer;
+        // fetch = next address the prefetcher will load (buffer holds fetch-head bytes;
+        //         full at 16 = 8 half-words);
+        // countdown = cycles until the in-flight half-word at fetch completes;
+        // active    = unit has started counting since last reset (NBA: prefetch.active);
+        // was_filled = buffer hit capacity; stall until empty (Mesen: WasFilled);
+        // pf_clock  = master clock the unit was last advanced to.
+        u32 head{};
+        u32 fetch{};
+        i32 countdown{};
+        i32 duty{};
+        bool active{};
+        bool was_filled{};
+        u64 pf_clock{};
     } prefetch{};
 };
 
