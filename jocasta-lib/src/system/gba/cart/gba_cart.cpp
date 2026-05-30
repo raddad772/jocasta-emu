@@ -27,16 +27,10 @@ MT_IW32(GBA::core, write);
 MT_IW32(GBA::core, write_sram);
 
 
-// Returns 1 if a data/SRAM access catches the in-flight half-word exactly one
-// cycle from completing (the "ROM access during prefetch" penalty). Caller must
-// advance the sim to the current clock before calling.
 u32 core::prefetch_penalty() const {
     return prefetch.enable && prefetch.active && !prefetch.was_filled && prefetch.countdown == 1 ? 1u : 0u;
 }
 
-// Tick the prefetch unit `clocks` cycles (NBA-style countdown subtraction).
-// Each time the countdown expires a half-word is loaded (fetch += 2) and the
-// timer reloads to S. Stops early if the buffer fills (was_filled = true).
 void core::prefetch_tick(i32 clocks, i32 S) {
     auto &pf = prefetch;
     if (S <= 0 || clocks <= 0 || pf.was_filled) return;
@@ -49,8 +43,6 @@ void core::prefetch_tick(i32 clocks, i32 S) {
     }
 }
 
-// Advance the unit over idle cycles elapsed since it was last advanced.
-// A full or disabled unit does not advance.
 void core::prefetch_sim_advance(u64 now) {
     auto &pf = prefetch;
     i64 clocks = static_cast<i64>(now) - static_cast<i64>(pf.pf_clock);
@@ -80,8 +72,6 @@ u32 core::read(GBA::core *gba, u32 addr, u8 access) {
         return (addr >> 1) & masksz[sz];
     }
 
-    // Peek reads (used by the cached-interpreter compiler to inspect ROM bytes)
-    // must not touch any timing or prefetch state.
     if constexpr (peek) {
         if constexpr(sz == 1) return reinterpret_cast<u8 *>(th->ROM.ptr)[addr];
         if constexpr(sz == 2) return reinterpret_cast<u16 *>(th->ROM.ptr)[addr >> 1];
@@ -91,13 +81,10 @@ u32 core::read(GBA::core *gba, u32 addr, u8 access) {
 
     u32 sequential = (access & ARM32P_sequential);
     if ((addr & 0x1FFFF) == 0) sequential = 0; // 128KB blocks are non-sequential
-    // First ROM access after the prefetch buffer was disabled must be non-sequential,
-    // because the buffer contents are now stale and the pipeline was broken.
     if (th->prefetch.was_disabled) {
         sequential = 0;
         th->prefetch.was_disabled = false;
     }
-    // determine cycles of this access
     if constexpr (do_debug) {
         if (dbg.do_debug) {
             trace_view *tv = gba->cpu.dbg.tvptr;
@@ -136,28 +123,24 @@ u32 core::read(GBA::core *gba, u32 addr, u8 access) {
     const u32 halfwords = (sz == 4) ? 2u : 1u;
 
     if (is_code && full_addr == pf.head) {
-        // Sequential code fetch: consume from the buffer (or wait for in-flight).
         outcycles += 1;
         th->prefetch_tick(1, S);
         for (u32 h = 0; h < halfwords; h++) {
             if (pf.was_filled && pf.head == pf.fetch) { pf.was_filled = false; pf.countdown = N; }
-            if (pf.head == pf.fetch) {                  // buffer empty: wait for in-flight half-word
+            if (pf.head == pf.fetch) {
                 outcycles += static_cast<u32>(pf.countdown);
                 th->prefetch_tick(pf.countdown, S);
             }
             pf.head += 2;
         }
     } else {
-        // Code branch/miss or ROM data read: penalty if in-flight half-word is 1 cycle from done.
         outcycles += th->prefetch_penalty();
         if (is_code) {
-            // prefetchSync: reset unit to fetch ahead from the new PC
             pf.head = pf.fetch = full_addr + sz;
             pf.countdown = S;
             pf.was_filled = false;
             pf.active = false;
         } else {
-            // prefetchReset: data read flushes the unit entirely
             pf.head = pf.fetch = 0;
             pf.countdown = 0;
             pf.was_filled = true;
@@ -167,8 +150,6 @@ u32 core::read(GBA::core *gba, u32 addr, u8 access) {
         outcycles += (sz == 4) ? static_cast<u32>(first + S) : static_cast<u32>(first);
     }
 
-    // Mark the unit advanced up to this access's completion so the next
-    // elapsed-advance starts after the cost (a stopped unit stays put).
     pf.pf_clock = static_cast<u64>(tt + outcycles);
     pf.duty = S;
 
