@@ -21,6 +21,8 @@ jobs:
       run: git submodule update --init --recursive
 
     - name: Build Linux x64 artifacts
+      env:
+        JOCASTA_PRESETS: linux-x64-release
       run: tools/linux/x64/build-jocasta-gui.sh
 
     - name: Upload Linux x64 artifacts

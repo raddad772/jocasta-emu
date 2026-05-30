@@ -31,7 +31,7 @@ jobs:
         sdl_prefix=$(brew --prefix sdl3)
         mkdir -p artifacts
 
-        for preset in macos-debug macos-release; do
+        for preset in macos-release; do
           config=${preset#macos-}
           build_dir="cmake-build-${preset}"
           app_dir="${build_dir}/jocasta-gui"

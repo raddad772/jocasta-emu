@@ -21,6 +21,8 @@ jobs:
       run: git submodule update --init --recursive
 
     - name: Build Windows cross artifacts
+      env:
+        JOCASTA_PRESETS: windows-clang-mingw-release
       run: tools/windows/clang-mingw/build-jocasta-gui.sh
 
     - name: Upload Windows artifacts
