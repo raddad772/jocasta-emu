@@ -1,0 +1,1340 @@
+//
+// Created by . on 2/20/25.
+//
+#include <cstring>
+#include <cassert>
+#include "ps1_spu.h"
+
+#include <ranges>
+
+#include "ps1_bus.h"
+#include "component/audio/ym2612/ym2612.h"
+#include "helpers/multisize_memaccess.cpp"
+#include "system/snes/snes_apu.h"
+
+//#define TRANSIENT
+
+namespace PS1::SPU {
+
+#define VOL(a,b) (static_cast<i16>(((static_cast<i32>(a) * static_cast<i32>(b)) >> 15)))
+
+#define MAX(a,b) ((a)>(b)?(a):(b))
+#define MIN(a,b) ((a)<(b)?(a):(b))
+
+#define REVERB_REG(x) ((x - 0x1F801DC0) >> 1)
+
+//  1F801DC0h rev00 dAPF1   disp    Reverb APF Offset 1
+#define dAPF1 REVERB_REG(0x1F801DC0)
+//  1F801DC2h rev01 dAPF2   disp    Reverb APF Offset 2
+#define dAPF2 REVERB_REG(0x1F801DC2)
+//  1F801DC4h rev02 vIIR    volume  Reverb Reflection Volume 1
+#define vIIR REVERB_REG(0x1F801DC4)
+//  1F801DC6h rev03 vCOMB1  volume  Reverb Comb Volume 1
+#define vCOMB1 REVERB_REG(0x1F801DC6)
+//  1F801DC8h rev04 vCOMB2  volume  Reverb Comb Volume 2
+#define vCOMB2 REVERB_REG(0x1F801DC8)
+//  1F801DCAh rev05 vCOMB3  volume  Reverb Comb Volume 3
+#define vCOMB3 REVERB_REG(0x1F801DCA)
+    //  1F801DCCh rev06 vCOMB4  volume  Reverb Comb Volume 4
+#define vCOMB4 REVERB_REG(0x1F801DCC)
+    //  1F801DCEh rev07 vWALL   volume  Reverb Reflection Volume 2
+#define vWALL REVERB_REG(0x1F801DCE)
+    //  1F801DD0h rev08 vAPF1   volume  Reverb APF Volume 1
+#define vAPF1 REVERB_REG(0x1F801DD0)
+    //  1F801DD2h rev09 vAPF2   volume  Reverb APF Volume 2
+#define vAPF2 REVERB_REG(0x1F801DD2)
+    //  1F801DD4h rev0A mLSAME  src/dst Reverb Same Side Reflection Address 1 Left
+#define mLSAME REVERB_REG(0x1F801DD4)
+    //  1F801DD6h rev0B mRSAME  src/dst Reverb Same Side Reflection Address 1 Right
+#define mRSAME REVERB_REG(0x1F801DD6)
+    //  1F801DD8h rev0C mLCOMB1 src     Reverb Comb Address 1 Left
+#define mLCOMB1 REVERB_REG(0x1F801DD8)
+    //  1F801DDAh rev0D mRCOMB1 src     Reverb Comb Address 1 Right
+#define mRCOMB1 REVERB_REG(0x1F801DDA)
+    //  1F801DDCh rev0E mLCOMB2 src     Reverb Comb Address 2 Left
+#define mLCOMB2 REVERB_REG(0x1F801DDC)
+    //  1F801DDEh rev0F mRCOMB2 src     Reverb Comb Address 2 Right
+#define mRCOMB2 REVERB_REG(0x1F801DDE)
+    //  1F801DE0h rev10 dLSAME  src     Reverb Same Side Reflection Address 2 Left
+#define dLSAME REVERB_REG(0x1F801DE0)
+    //  1F801DE2h rev11 dRSAME  src     Reverb Same Side Reflection Address 2 Right
+#define dRSAME REVERB_REG(0x1F801DE2)
+    //  1F801DE4h rev12 mLDIFF  src/dst Reverb Different Side Reflect Address 1 Left
+#define mLDIFF REVERB_REG(0x1F801DE4)
+    //  1F801DE6h rev13 mRDIFF  src/dst Reverb Different Side Reflect Address 1 Right
+#define mRDIFF REVERB_REG(0x1F801DE6)
+    //  1F801DE8h rev14 mLCOMB3 src     Reverb Comb Address 3 Left
+#define mLCOMB3 REVERB_REG(0x1F801DE8)
+    //  1F801DEAh rev15 mRCOMB3 src     Reverb Comb Address 3 Right
+#define mRCOMB3 REVERB_REG(0x1F801DEA)
+    //  1F801DECh rev16 mLCOMB4 src     Reverb Comb Address 4 Left
+#define mLCOMB4 REVERB_REG(0x1F801DEC)
+    //  1F801DEEh rev17 mRCOMB4 src     Reverb Comb Address 4 Right
+#define mRCOMB4 REVERB_REG(0x1F801DEE)
+    //  1F801DF0h rev18 dLDIFF  src     Reverb Different Side Reflect Address 2 Left
+#define dLDIFF REVERB_REG(0x1F801DF0)
+    //  1F801DF2h rev19 dRDIFF  src     Reverb Different Side Reflect Address 2 Right
+#define dRDIFF REVERB_REG(0x1F801DF2)
+    //  1F801DF4h rev1A mLAPF1  src/dst Reverb APF Address 1 Left
+#define mLAPF1 REVERB_REG(0x1F801DF4)
+    //  1F801DF6h rev1B mRAPF1  src/dst Reverb APF Address 1 Right
+#define mRAPF1 REVERB_REG(0x1F801DF6)
+    //  1F801DF8h rev1C mLAPF2  src/dst Reverb APF Address 2 Left
+#define mLAPF2 REVERB_REG(0x1F801DF8)
+    //  1F801DFAh rev1D mRAPF2  src/dst Reverb APF Address 2 Right
+#define mRAPF2 REVERB_REG(0x1F801DFA)
+// 1F801DFCh rev1E vLIN    volume  Reverb Input Volume Left
+#define vLIN REVERB_REG(0x1F801DFC)
+  // 1F801DFEh rev1F vRIN    volume  Reverb Input Volume Right
+#define vRIN REVERB_REG(0x1F801DFE)
+
+#define RREG(x) io.reverb.regs[x]
+#define RREG_ADDR(x) (static_cast<u32>(io.reverb.regs[x]) << 3)
+#define READ_RREG_ADDR(x) static_cast<i16>(read_RAM(reverb_addr(RREG_ADDR(x)), true, true))
+#define READ_RREG_ADDR_MINUS2(x) static_cast<i16>(read_RAM(reverb_addr(RREG_ADDR(x)-2), true, true))
+#define WRITE_RREG_ADDR(x, y) if (io.SPUCNT.reverb_master_enable) write_RAM(reverb_addr(RREG_ADDR(x)), static_cast<u16>(static_cast<i16>(y)), true);
+#define CLAMP(x, low, high) ((x) < (low) ? (low) : ((x) > (high) ? (high) : (x)))
+
+static constexpr i32 gauss_table[0x200] =  {
+    -0x001, -0x001, -0x001, -0x001, -0x001, -0x001, -0x001, -0x001, //
+    -0x001, -0x001, -0x001, -0x001, -0x001, -0x001, -0x001, -0x001, //
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001, //
+    0x0001, 0x0001, 0x0001, 0x0002, 0x0002, 0x0002, 0x0003, 0x0003, //
+    0x0003, 0x0004, 0x0004, 0x0005, 0x0005, 0x0006, 0x0007, 0x0007, //
+    0x0008, 0x0009, 0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x000E, //
+    0x000F, 0x0010, 0x0011, 0x0012, 0x0013, 0x0015, 0x0016, 0x0018, // entry
+    0x0019, 0x001B, 0x001C, 0x001E, 0x0020, 0x0021, 0x0023, 0x0025, // 000..07F
+    0x0027, 0x0029, 0x002C, 0x002E, 0x0030, 0x0033, 0x0035, 0x0038, //
+    0x003A, 0x003D, 0x0040, 0x0043, 0x0046, 0x0049, 0x004D, 0x0050, //
+    0x0054, 0x0057, 0x005B, 0x005F, 0x0063, 0x0067, 0x006B, 0x006F, //
+    0x0074, 0x0078, 0x007D, 0x0082, 0x0087, 0x008C, 0x0091, 0x0096, //
+    0x009C, 0x00A1, 0x00A7, 0x00AD, 0x00B3, 0x00BA, 0x00C0, 0x00C7, //
+    0x00CD, 0x00D4, 0x00DB, 0x00E3, 0x00EA, 0x00F2, 0x00FA, 0x0101, //
+    0x010A, 0x0112, 0x011B, 0x0123, 0x012C, 0x0135, 0x013F, 0x0148, //
+    0x0152, 0x015C, 0x0166, 0x0171, 0x017B, 0x0186, 0x0191, 0x019C, //
+    0x01A8, 0x01B4, 0x01C0, 0x01CC, 0x01D9, 0x01E5, 0x01F2, 0x0200, //
+    0x020D, 0x021B, 0x0229, 0x0237, 0x0246, 0x0255, 0x0264, 0x0273, //
+    0x0283, 0x0293, 0x02A3, 0x02B4, 0x02C4, 0x02D6, 0x02E7, 0x02F9, //
+    0x030B, 0x031D, 0x0330, 0x0343, 0x0356, 0x036A, 0x037E, 0x0392, //
+    0x03A7, 0x03BC, 0x03D1, 0x03E7, 0x03FC, 0x0413, 0x042A, 0x0441, //
+    0x0458, 0x0470, 0x0488, 0x04A0, 0x04B9, 0x04D2, 0x04EC, 0x0506, //
+    0x0520, 0x053B, 0x0556, 0x0572, 0x058E, 0x05AA, 0x05C7, 0x05E4, // entry
+    0x0601, 0x061F, 0x063E, 0x065C, 0x067C, 0x069B, 0x06BB, 0x06DC, // 080..0FF
+    0x06FD, 0x071E, 0x0740, 0x0762, 0x0784, 0x07A7, 0x07CB, 0x07EF, //
+    0x0813, 0x0838, 0x085D, 0x0883, 0x08A9, 0x08D0, 0x08F7, 0x091E, //
+    0x0946, 0x096F, 0x0998, 0x09C1, 0x09EB, 0x0A16, 0x0A40, 0x0A6C, //
+    0x0A98, 0x0AC4, 0x0AF1, 0x0B1E, 0x0B4C, 0x0B7A, 0x0BA9, 0x0BD8, //
+    0x0C07, 0x0C38, 0x0C68, 0x0C99, 0x0CCB, 0x0CFD, 0x0D30, 0x0D63, //
+    0x0D97, 0x0DCB, 0x0E00, 0x0E35, 0x0E6B, 0x0EA1, 0x0ED7, 0x0F0F, //
+    0x0F46, 0x0F7F, 0x0FB7, 0x0FF1, 0x102A, 0x1065, 0x109F, 0x10DB, //
+    0x1116, 0x1153, 0x118F, 0x11CD, 0x120B, 0x1249, 0x1288, 0x12C7, //
+    0x1307, 0x1347, 0x1388, 0x13C9, 0x140B, 0x144D, 0x1490, 0x14D4, //
+    0x1517, 0x155C, 0x15A0, 0x15E6, 0x162C, 0x1672, 0x16B9, 0x1700, //
+    0x1747, 0x1790, 0x17D8, 0x1821, 0x186B, 0x18B5, 0x1900, 0x194B, //
+    0x1996, 0x19E2, 0x1A2E, 0x1A7B, 0x1AC8, 0x1B16, 0x1B64, 0x1BB3, //
+    0x1C02, 0x1C51, 0x1CA1, 0x1CF1, 0x1D42, 0x1D93, 0x1DE5, 0x1E37, //
+    0x1E89, 0x1EDC, 0x1F2F, 0x1F82, 0x1FD6, 0x202A, 0x207F, 0x20D4, //
+    0x2129, 0x217F, 0x21D5, 0x222C, 0x2282, 0x22DA, 0x2331, 0x2389, // entry
+    0x23E1, 0x2439, 0x2492, 0x24EB, 0x2545, 0x259E, 0x25F8, 0x2653, // 100..17F
+    0x26AD, 0x2708, 0x2763, 0x27BE, 0x281A, 0x2876, 0x28D2, 0x292E, //
+    0x298B, 0x29E7, 0x2A44, 0x2AA1, 0x2AFF, 0x2B5C, 0x2BBA, 0x2C18, //
+    0x2C76, 0x2CD4, 0x2D33, 0x2D91, 0x2DF0, 0x2E4F, 0x2EAE, 0x2F0D, //
+    0x2F6C, 0x2FCC, 0x302B, 0x308B, 0x30EA, 0x314A, 0x31AA, 0x3209, //
+    0x3269, 0x32C9, 0x3329, 0x3389, 0x33E9, 0x3449, 0x34A9, 0x3509, //
+    0x3569, 0x35C9, 0x3629, 0x3689, 0x36E8, 0x3748, 0x37A8, 0x3807, //
+    0x3867, 0x38C6, 0x3926, 0x3985, 0x39E4, 0x3A43, 0x3AA2, 0x3B00, //
+    0x3B5F, 0x3BBD, 0x3C1B, 0x3C79, 0x3CD7, 0x3D35, 0x3D92, 0x3DEF, //
+    0x3E4C, 0x3EA9, 0x3F05, 0x3F62, 0x3FBD, 0x4019, 0x4074, 0x40D0, //
+    0x412A, 0x4185, 0x41DF, 0x4239, 0x4292, 0x42EB, 0x4344, 0x439C, //
+    0x43F4, 0x444C, 0x44A3, 0x44FA, 0x4550, 0x45A6, 0x45FC, 0x4651, //
+    0x46A6, 0x46FA, 0x474E, 0x47A1, 0x47F4, 0x4846, 0x4898, 0x48E9, //
+    0x493A, 0x498A, 0x49D9, 0x4A29, 0x4A77, 0x4AC5, 0x4B13, 0x4B5F, //
+    0x4BAC, 0x4BF7, 0x4C42, 0x4C8D, 0x4CD7, 0x4D20, 0x4D68, 0x4DB0, //
+    0x4DF7, 0x4E3E, 0x4E84, 0x4EC9, 0x4F0E, 0x4F52, 0x4F95, 0x4FD7, // entry
+    0x5019, 0x505A, 0x509A, 0x50DA, 0x5118, 0x5156, 0x5194, 0x51D0, // 180..1FF
+    0x520C, 0x5247, 0x5281, 0x52BA, 0x52F3, 0x532A, 0x5361, 0x5397, //
+    0x53CC, 0x5401, 0x5434, 0x5467, 0x5499, 0x54CA, 0x54FA, 0x5529, //
+    0x5558, 0x5585, 0x55B2, 0x55DE, 0x5609, 0x5632, 0x565B, 0x5684, //
+    0x56AB, 0x56D1, 0x56F6, 0x571B, 0x573E, 0x5761, 0x5782, 0x57A3, //
+    0x57C3, 0x57E2, 0x57FF, 0x581C, 0x5838, 0x5853, 0x586D, 0x5886, //
+    0x589E, 0x58B5, 0x58CB, 0x58E0, 0x58F4, 0x5907, 0x5919, 0x592A, //
+    0x593A, 0x5949, 0x5958, 0x5965, 0x5971, 0x597C, 0x5986, 0x598F, //
+    0x5997, 0x599E, 0x59A4, 0x59A9, 0x59AD, 0x59B0, 0x59B2, 0x59B3  //
+  };
+
+
+void SCIRCBUF::push(i16 *smps) {
+    cur_block_start = idx;
+    // Push an ADPCM block
+    for (u32 i = 0; i < 28; i++) {
+        samples[idx] = static_cast<i32>(smps[i]);
+        idx = (idx + 1) & 31;
+    }
+}
+
+void VOICE::adpcm_start() {
+    adpcm.cur_addr = adpcm.start_addr;
+    adpcm_decode();
+}
+static constexpr i32 filter_table_pos[16] = {0, 60, 115, 98, 122, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+static constexpr i32 filter_table_neg[16] = {0, 0, -52, -55, -60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+void VOICE::adpcm_decode() {
+    u8 data[16];
+    u32 start_addr = adpcm.cur_addr;
+    for (u32 i = 0; i < 16; i++) {
+        data[i] = bus->spu.read_RAM8(adpcm.cur_addr, true , true);
+        adpcm.cur_addr++;
+    }
+    u8 flag = data[1];
+    if (flag & 4) { // Loop start
+        if (!loop_written) adpcm.repeat_addr = start_addr;
+    }
+    if (flag & 1) { // loop end
+        io.reached_loop_end = 1;
+        adpcm.cur_addr = adpcm.repeat_addr;
+        if (!(flag & 2) && !io.noise_enable) { // loop end + mute
+            env.adsr.output = 0;
+            env.phase = EP_OFF;
+        }
+    }
+    const u8 hd = data[0];
+    u8 shift = hd & 0xF;
+    if (shift > 12) shift = 9;
+    u8 filter = (hd >> 4) & 7;
+    const i32 filter_pos = filter_table_pos[filter];
+    const i32 filter_neg = filter_table_neg[filter];
+
+    u32 idx = 2;
+    u32 nibble = 0;
+#ifdef TRANSIENT
+    static int num_with_val = 0;
+    bool flatten = num_with_val > 0;
+#endif
+    for (short & s_out : adpcm.samples) {
+        i32 t;
+        if (nibble == 0) {
+            t = data[idx] & 0x0F;
+        }
+        else {
+            t = data[idx] >> 4;
+            idx++;
+        }
+        nibble ^= 1;
+        // t is a signed 4-bit value so convert to 32-bit signed
+        t = (t << 28) >> 16;
+        i32 s = t >> shift;
+        i32 filtered = s + ((static_cast<i32>(old) * filter_pos) >> 6) + ((static_cast<i32>(older) * filter_neg) >> 6);
+        filtered = CLAMP(filtered, -0x8000, 0x7FFF);
+        s_out = filtered;
+#ifdef TRANSIENT
+        if (s_out >= 0x7000) {
+            num_with_val++;
+        }
+        if (flatten) s_out = 0;
+#endif
+        older = old;
+        old = filtered;
+    }
+    gauss.decoded.push(adpcm.samples);
+}
+
+void FIFO_t::push(u16 item) {
+    if (len >= 32) {
+        printf("\n(SPU) FIFO OVERFLOW!");
+        return;
+    }
+    items[tail] = item;
+    tail = (tail + 1) & 31;
+    len++;
+}
+
+u16 FIFO_t::pop() {
+    if (len < 1) {
+        printf("\n(SPU) FIFO UNDERFLOW!");
+        return 0xFFFF;
+    }
+    u16 v = items[head];
+    head = (head + 1) & 31;
+    len--;
+    return v;
+}
+
+void FIFO_t::clear() {
+    len = head = tail = 0;
+}
+
+void core::update_IRQs() {
+    u32 old = io.IRQ_level;
+    io.IRQ_level = io.SPUCNT.irq9_enable && io.SPUCNT.master_enable && io.SPUSTAT.irq9;
+    if (old != io.IRQ_level) bus->set_irq(IRQ_SPU, io.IRQ_level);
+}
+
+void ADSR_ENVELOPE::load_attack() {
+    adsr.exponential = attack_exponential;
+    adsr.decreasing = 0;
+    adsr.shift = attack_shift;
+    adsr.step = attack_step;
+    adsr.negative = 0;
+    adsr.rate_mask = 0x7F;
+    phase = EP_ATTACK;
+    adsr.calc();
+}
+
+void ADSR_ENVELOPE::load_decay() {
+    adsr.exponential = 1;
+    adsr.decreasing = 1;
+    adsr.shift = decay_shift;
+    adsr.step = 0;
+    adsr.negative = 0;
+    adsr.rate_mask = 0x7C;
+    phase = EP_DECAY;
+    adsr.calc();
+}
+
+void ADSR_ENVELOPE::load_sustain() {
+    adsr.exponential = sustain_exponential;
+    adsr.decreasing = sustain_decreasing;
+    adsr.shift = sustain_shift;
+    adsr.step = sustain_step;
+    adsr.negative = 0;
+    adsr.rate_mask = 0x7F;
+    phase = EP_SUSTAIN;
+    adsr.calc();
+}
+
+void ADSR_ENVELOPE::load_release() {
+    adsr.exponential = release_exponential;
+    adsr.decreasing = 1;
+    adsr.shift = release_shift;
+    adsr.step = 0;
+    adsr.negative = 0;
+    adsr.rate_mask = 0x7C;
+    phase = EP_RELEASE;
+    adsr.calc();
+}
+
+void ADSR_ENVELOPE::reload_phase() {
+    switch (phase) {
+        case EP_ATTACK: load_attack(); return;
+        case EP_DECAY: load_decay(); return;
+        case EP_SUSTAIN: load_sustain(); return;
+        case EP_RELEASE: load_release(); return;
+        case EP_OFF: return;
+        default: NOGOHERE;
+    }
+}
+
+void ADSR_ENVELOPE::cycle() {
+    if (phase == EP_OFF) return;
+
+    adsr.cycle();
+    switch (phase) {
+        case EP_ATTACK:
+            if (adsr.output >= 0x7FFF) {
+                load_decay();
+            }
+            break;
+        case EP_DECAY:
+            if (adsr.output <= sustain_level) {
+                load_sustain();
+            }
+            break;
+        case EP_SUSTAIN:
+            break;
+        case EP_RELEASE:
+            if (adsr.output <= 0) {
+                adsr.output = 0;
+                phase = EP_OFF;
+            }
+            break;
+        default:
+            NOGOHERE;
+    }
+}
+
+void ADSR_GENERATOR::cycle() {
+    if (counter_reload <= 0) return;
+
+    u32 this_increment = static_cast<u32>(counter_reload);
+    i32 this_step = adsr_step;
+    const i32 rate = (shift << 2) | step;
+
+    if (exponential) {
+        if (decreasing) {
+            this_step = (this_step * output) >> 15;
+        }
+        else if (output >= 0x6000) {
+            if (rate < 40) {
+                this_step >>= 2;
+            }
+            else if (rate >= 44) {
+                this_increment >>= 2;
+            }
+            else {
+                this_step >>= 1;
+                this_increment >>= 1;
+            }
+        }
+    }
+
+    if (this_increment == 0) return;
+    counter += static_cast<i32>(this_increment);
+    if ((counter & 0x8000) == 0) return;
+    counter = 0;
+
+    output += this_step;
+    if (!decreasing) {
+        output = CLAMP(output, -0x8000, 0x7FFF);
+    }
+    else if (negative) {
+        output = CLAMP(output, -0x8000, 0);
+    }
+    else {
+        output = MAX(output, 0);
+    }
+}
+
+void VOICE_VOL::cycle() {
+    // Adavnce the voice
+    sweep.cycle();
+}
+
+void ADSR_GENERATOR::calc() {
+    const i32 rate = (shift << 2) | step;
+    const i32 base_step = 7 - (rate & 3);
+    const bool phase_invert = negative && !(decreasing && exponential);
+
+    adsr_step = ((decreasing ^ phase_invert) || (decreasing && exponential)) ? ~base_step : base_step;
+    counter_reload = 0x8000;
+
+    if (rate < 44) {
+        adsr_step <<= (11 - (rate >> 2));
+    }
+    else if (rate >= 48) {
+        counter_reload >>= ((rate >> 2) - 11);
+        if ((rate & rate_mask) != rate_mask) {
+            counter_reload = MAX(counter_reload, 1);
+        }
+        else {
+            counter_reload = 0;
+        }
+    }
+
+    counter = 0;
+}
+
+void VOICE_VOL::write(u16 v) {
+    io_val = v;
+    mode = static_cast<VV_MODE>((v >> 15) & 1);
+    if (mode == VVM_FIXED) sweep.output = static_cast<i16>(v << 1);
+    else {
+        // Do sweep stuff!
+        sweep.exponential = (v >> 14) & 1;
+        sweep.decreasing = (v >> 13) & 1;
+        phase = (v >> 12) & 1;
+        sweep.negative = phase;
+        sweep.shift = (v >> 2) & 0x1F;
+        sweep.step = v & 3;
+        sweep.rate_mask = 0x7F;
+        sweep.calc();
+    }
+}
+
+u16 VOICE_VOL::read() {
+    return io_val;
+}
+
+void VOICE::gaussian_me_up() {
+    u32 idx = ((pitch_counter >> 12) + gauss.decoded.cur_block_start) & 31;
+    u16 gauss_index = (pitch_counter >> 4) & 0xFF;
+    i32 v = (gauss_table[0xFF-gauss_index] * gauss.decoded.samples[(idx-3)&31]);
+    v += (gauss_table[0x1FF-gauss_index] * gauss.decoded.samples[(idx-2)&31]);
+    v += (gauss_table[0x100+gauss_index] * gauss.decoded.samples[(idx-1)&31]);
+    v += (gauss_table[gauss_index] * gauss.decoded.samples[idx]);
+    v >>= 15;
+    v = CLAMP(v, -0x8000, 0x7FFF);
+    sample = v;
+    //sample = gauss.decoded.samples[idx];
+}
+
+void VOICE::cycle(i16 noise_level) {
+    if (env.phase == EP_OFF) {
+        sample = 0;
+        sample_l = 0;
+        sample_r = 0;
+        return;
+    }
+
+    i32 step = io.sample_rate;
+    if (io.PMON && num > 0) {
+        i32 factor = bus->spu.voices[num-1].sample;
+        factor += 0x8000;
+        factor = static_cast<i32>(static_cast<i16>(factor));
+        i32 estep = step;
+        estep = (estep * factor) >> 15;
+        step = estep & 0xFFFF;
+    }
+
+    // TODO: sample every 768 samples
+    if (step > 0x3FFF) step = 0x4000;
+    env.cycle();
+    if (io.vol_l.mode) io.vol_l.cycle();
+    if (io.vol_r.mode) io.vol_r.cycle();
+
+    pitch_counter = (pitch_counter + step);
+
+    if (pitch_counter >= 0x1C000) {
+        pitch_counter -= 0x1C000;
+        // New block!
+        adpcm_decode();
+    }
+    gaussian_me_up();
+    if (io.noise_enable) sample = VOL(noise_level, env.adsr.output);
+    else sample = VOL(sample, env.adsr.output);
+    sample_l = VOL(io.vol_l.sweep.output, sample);
+    sample_r = VOL(io.vol_r.sweep.output, sample);
+}
+
+static void sch_FIFO_transfer(void *ptr, u64 key, u64 timecode, u32 jitter) {
+    auto *th = static_cast<SPU::core *>(ptr);
+    th->FIFO_transfer(timecode - jitter);
+}
+
+void core::DMA_write(u32 val) {
+    if (!io.SPUSTAT.data_transfer_dma_write_req) {
+        printf("\n(SPU) WARN DMA write ignored wrong mode %d", io.SPUCNT.sound_ram_transfer_mode);
+        return;
+    }
+    latch.RAM_transfer_addr &= 0x7FFFF;
+    write_RAM(latch.RAM_transfer_addr, val & 0xFFFF, true);
+    latch.RAM_transfer_addr = (latch.RAM_transfer_addr + 2) & 0x7FFFF;
+    write_RAM(latch.RAM_transfer_addr, val >> 16, true);
+    latch.RAM_transfer_addr += 2;
+}
+
+u32 core::DMA_read() {
+    if (!io.SPUSTAT.data_transfer_dma_read_req) {
+        printf("\n(SPU) WARN DMA read ignored wrong mode %d", io.SPUCNT.sound_ram_transfer_mode);
+        return 0xFFFFFFFF;
+    }
+
+    latch.RAM_transfer_addr &= 0x7FFFF;
+    u32 v = read_RAM(latch.RAM_transfer_addr, true, true);
+    latch.RAM_transfer_addr = (latch.RAM_transfer_addr + 2) & 0x7FFFF;
+    v |= read_RAM(latch.RAM_transfer_addr, true, true) << 16;
+    latch.RAM_transfer_addr += 2;
+    return v;
+}
+
+void core::commit_FIFO() {
+    while (FIFO.len > 0) {
+        //if (io.RAMCNT.mode != 1) printf("\n(SPU) WARN MANUAL FIFO WRITE MODE!=2!");
+        latch.RAM_transfer_addr &= 0x7FFFF;
+        u16 v = FIFO.pop();
+        write_RAM(latch.RAM_transfer_addr, v, true);
+        latch.RAM_transfer_addr += 2;
+    }
+    io.SPUSTAT.data_transfer_busy = 0;
+}
+
+void core::FIFO_instant_transfer(u16 val) {
+    latch.RAM_transfer_addr &= 0x7FFFF;
+    write_RAM(latch.RAM_transfer_addr, val, true);
+    latch.RAM_transfer_addr += 2;
+}
+
+void core::FIFO_transfer(u64 clock) {
+    if (FIFO.len > 0) {
+        //if (io.RAMCNT.mode != 1) printf("\n(SPU) WARN MANUAL FIFO WRITE MODE!=2!");
+        latch.RAM_transfer_addr &= 0x7FFFF;
+        u16 v = FIFO.pop();
+        write_RAM(latch.RAM_transfer_addr, v, true);
+        latch.RAM_transfer_addr += 2;
+    }
+    if (FIFO.len != 0) {
+        schedule_FIFO_transfer(clock);
+    }
+    else {
+        io.SPUSTAT.data_transfer_busy = 0;
+    }
+}
+
+void core::schedule_FIFO_transfer(u64 clock) {
+    // i64 timecode, u64 key, void *ptr, scheduler_callback callback, u32 *still_sched
+    FIFO.sch_id = bus->scheduler.only_add_abs(clock + 60, 0, this, &sch_FIFO_transfer, &FIFO.still_sch);
+}
+
+static u32 constexpr masksz[5] = {0, 0xFF, 0xFFFF, 0, 0xFFFFFFFF };
+
+void core::write_control_regs(u32 addr, u8 sz, u32 val) {
+    switch (addr) {
+        case 0x1F801DA4: // IRQ9 addr
+            io.IRQ_addr = val << 3;
+            return;
+        case 0x1F801DA6: // RAM transfer address
+            io.RAM_transfer_addr = val;
+            latch.RAM_transfer_addr = val << 3;
+            return;
+        case 0x1F801DA8: // FIFO write
+            //FIFO_instant_transfer(val);
+            FIFO.push(val);
+            //if (io.SPUCNT.sound_ram_transfer_mode == 1) commit_FIFO();
+            //FIFO.push(val);
+            //printf("\nFIFO write len:%d", FIFO.len);
+            // if we're in data transfer mode, schedule it if it's not
+            /*if (io.SPUCNT.sound_ram_transfer_mode == 1 && !FIFO.still_sch) {
+                printf("\n(FIFO) drained reschedule");
+                schedule_FIFO_transfer(bus->clock.master_cycle_count);
+                io.SPUSTAT.data_transfer_busy = 1;
+            }*/
+            return;
+        case 0x1F801DAA: // SPUCNT
+            write_SPUCNT(val);
+            return;
+        case 0x1F801DAC: // RAMCNT
+            io.RAMCNT.u = val;
+            return;
+        case 0x1F801DAE: // SPUSTAT
+            return;
+        case 0x1F801DB0:
+            io.vol_CD_L = val;
+            return;
+        case 0x1F801DB2:
+            io.vol_CD_R = val;
+            return;
+        case 0x1F801DB4:
+            io.vol_ext_L = val;
+            return;
+        case 0x1F801DB6:
+            io.vol_ext_R = val;
+            return;
+        case 0x1F801DB8:
+            printf("\n(SPU) WARN SET CUR VOL L");
+            io.cur_vol_L = val;
+            return;
+        case 0x1F801DBA:
+            printf("\n(SPU) WARN SET CUR VOL R");
+            io.cur_vol_R = val;
+            return;
+    }
+    printf("\n(SPU) Unhandled CTRL write %08x(%d): %08x", addr, sz, val);
+}
+
+void core::write_SPUCNT(u16 val) {
+    io.SPUCNT.u = val & 0xFFFF;
+
+    io.SPUSTAT.u = (io.SPUSTAT.u & ~0b111111) | (val & 0b111111);
+    io.SPUSTAT.data_transfer_dma_rw_req = (val >> 5) & 1;
+    io.SPUSTAT.data_transfer_dma_read_req = 0;
+    io.SPUSTAT.data_transfer_dma_write_req = 0;
+    /*if (io.SPUCNT.sound_ram_transfer_mode != 1 && FIFO.still_sch) {
+        printf("\n(SPU) warn FIFO commit cancel!");
+        bus->scheduler.delete_if_exist(FIFO.sch_id);
+        io.SPUSTAT.data_transfer_busy = 0;
+    }*/
+    //printf("\n(SPU) Transfer mode %d", io.SPUCNT.sound_ram_transfer_mode);
+    switch (io.SPUCNT.sound_ram_transfer_mode) {
+        case 0: // OFF
+            break;
+        case 1: // Manual Write/commit FIFO
+            /*if (FIFO.len > 0) {
+                printf("\n(SPU) Already has %d FIFO items!", FIFO.len);
+                schedule_FIFO_transfer(bus->clock.master_cycle_count);
+                io.SPUSTAT.data_transfer_busy = 1;
+            }*/
+            commit_FIFO();
+            break;
+        case 2: // DMAWrite
+            io.SPUSTAT.data_transfer_dma_write_req = 1;
+            break;
+        case 3: // DMARead
+            io.SPUSTAT.data_transfer_dma_read_req = 1;
+            break;
+    }
+    if (!io.SPUCNT.irq9_enable) io.SPUSTAT.irq9 = 0;
+
+    noise.step = io.SPUCNT.noise_frequency_step + 4;
+    noise.shift = io.SPUCNT.noise_frequency_shift;
+    update_IRQs();
+}
+
+u32 core::read_control_regs(u32 addr, u8 sz) {
+    switch (addr) {
+        case 0x1F801DA4: // IRQ9 addr
+            return io.IRQ_addr << 3;
+        case 0x1F801DA6:
+            return io.RAM_transfer_addr;
+        case 0x1F801DA8:
+            printf("\n(SPU) FIFO READ WHAT?!");
+            return 0xFFFF;
+        case 0x1F801DAA: // SPUCNT
+            return io.SPUCNT.u;
+        case 0x1F801DAC: // RAMCNT
+            return io.RAMCNT.u;
+        case 0x1F801DAE: // SPUSTAT
+            return io.SPUSTAT.u;
+        case 0x1F801DB0:
+            return io.vol_CD_L;
+        case 0x1F801DB2:
+            return io.vol_CD_R;
+        case 0x1F801DB4:
+            return io.vol_ext_L;
+        case 0x1F801DB6:
+            return io.vol_ext_R;
+        case 0x1F801DB8:
+            return io.cur_vol_L;
+        case 0x1F801DBA:
+            return io.cur_vol_R;
+    }
+    printf("\n(SPU) Unhandled CTRL read %08x(%d)", addr, sz);
+    return 0xFFFF;
+}
+
+void core::write_reverb_reg(u32 addr, u8 sz, u32 val) {
+    addr -= 0x1F801DC0;
+    addr >>= 1;
+    // TODO: real regs
+    io.reverb.regs[addr] = val;
+
+}
+
+u32 core::read_reverb_reg(u32 addr, u8 sz) {
+    addr -= 0x1F801DC0;
+    addr >>= 1;
+    // TODO: real regs
+    return io.reverb.regs[addr];
+}
+
+
+void core::do_capture() {
+    u32 addr_add = io.SPUSTAT.capture_buffer_half ? 0x200 : 0;
+    i16 l, r;
+    bus->cdrom.get_CD_audio(l, r);
+    l = VOL(l, io.vol_CD_L);
+    r = VOL(r, io.vol_CD_R);
+    write_RAM(addr_add + capture.index, l, true);
+    write_RAM(0x400 + addr_add + capture.index, r, true);
+    write_RAM(0x800 + addr_add + capture.index, voices[1].sample, true);
+    write_RAM(0xC00 + addr_add + capture.index, voices[3].sample, true);
+    addr_add ^= 0x200;
+    capture.sample.cd_l = static_cast<i16>(read_RAM(addr_add+capture.index, true, true));
+    capture.sample.cd_r = static_cast<i16>(read_RAM(0x400+addr_add+capture.index, true, true));
+
+    capture.index = (capture.index + 2) & 0x1FF;
+    if (capture.index == 0) {
+#ifndef LYCODER
+        io.SPUSTAT.capture_buffer_half ^= 1;
+#endif
+    }
+}
+
+void core::do_noise() {
+    noise.timer -= noise.step;
+    u32 bit = (noise.level >> 15) & 1;
+    bit ^= (noise.level >> 12) & 1;
+    bit ^= (noise.level >> 11) & 1;
+    bit ^= (noise.level >> 10) & 1;
+    bit ^= 1;
+    if (noise.timer < 0) {
+        noise.level = (noise.level << 1) + bit;
+        noise.timer += (20000 >> noise.shift);
+    }
+    if (noise.timer < 0) {
+        noise.timer += (20000 >> noise.shift);
+    }
+
+}
+
+static constexpr i32 reverb_FIR[39] = {
+-0x0001,  0x0000,  0x0002,  0x0000, -0x000A,  0x0000,  0x0023, 0x0000,
+-0x0067,  0x0000,  0x010A,  0x0000, -0x0268,  0x0000,  0x0534,  0x0000,
+-0x0B90,  0x0000,  0x2806,  0x4000,  0x2806,  0x0000, -0x0B90,  0x0000,
+ 0x0534,  0x0000, -0x0268,  0x0000,  0x010A,  0x0000, -0x0067,  0x0000,
+ 0x0023,  0x0000, -0x000A,  0x0000,  0x0002,  0x0000, -0x0001,
+};
+
+void FIR_filter::add_sample(i32 smp) {
+    samples[pos] = smp;
+    pos = (pos + 1) % 39;
+}
+
+i32 FIR_filter::run() {
+    i32 o = 0;
+    u32 p = pos;
+    for (const i32 s : reverb_FIR) {
+        o += (samples[p] * s);// >> 15;
+        p = (p + 1) % 39;
+    }
+    return o >> 15;
+}
+#define RVOL(a,b) ((static_cast<i32>(a)*static_cast<i32>(b))>>15)
+
+void core::process_reverb() {
+    // Ingest L/R samples
+    reverb.filter_l.in.add_sample(reverb.in_l);
+    reverb.filter_r.in.add_sample(reverb.in_r);
+
+    if (!reverb.counter) { // 22050 clock
+    //if (true) {
+        // Actually run reverb now...
+        i32 l = RVOL(reverb.filter_l.in.run(), RREG(vLIN));
+        l = CLAMP(l, -0x8000, 0x7FFF);
+        i32 r = RVOL(reverb.filter_r.in.run(), RREG(vRIN));
+        r = CLAMP(r, -0x8000, 0x7FFF);
+        apply_reflection(l, r);
+        apply_comb_filter();
+        apply_all_pass_filter_1();
+        apply_all_pass_filter_2();
+        reverb.proc_l = CLAMP(reverb.proc_l, -0x8000, 0x7FFF);
+        reverb.proc_r = CLAMP(reverb.proc_r, -0x8000, 0x7FFF);
+        reverb.filter_l.out.add_sample(reverb.proc_l);
+        reverb.filter_r.out.add_sample(reverb.proc_r);
+        reverb.buf_addr = (reverb.buf_addr + 2) % reverb.buf_len;
+    }
+    else { // cycle 1, add a 0
+        reverb.filter_l.out.add_sample(0);
+        reverb.filter_r.out.add_sample(0);
+    }
+
+    // Run the sample filter to get our 44kHz output
+    reverb.sample_l = reverb.filter_l.out.run() << 1;
+    reverb.sample_r = reverb.filter_r.out.run() << 1;
+    reverb.sample_l = RVOL(reverb.sample_l, io.reverb.vol_out_l);
+    reverb.sample_r = RVOL(reverb.sample_r, io.reverb.vol_out_r);
+    reverb.sample_l = CLAMP(reverb.sample_l, -0x8000, 0x7FFF);
+    reverb.sample_r = CLAMP(reverb.sample_r, -0x8000, 0x7FFF);
+
+    reverb.counter ^= 1;
+}
+
+void core::apply_all_pass_filter_1() {
+    // ___Late Reverb APF1 (All Pass Filter 1, with input from COMB)________________
+    i32 s;
+
+    // READ REVERB   mLAPF1 - dAPF1    mRAPF1 - dAPF1
+    i16 r_mLAPF1dAPF1 = static_cast<i16>(read_RAM(reverb_addr(RREG_ADDR(mLAPF1) - RREG_ADDR(dAPF1)), true, true));
+    i16 r_mRAPF1dAPF1 = static_cast<i16>(read_RAM(reverb_addr(RREG_ADDR(mRAPF1) - RREG_ADDR(dAPF1)), true, true));
+    reverb.r_mLAPF2dAPF2 = static_cast<i16>(read_RAM(reverb_addr(RREG_ADDR(mLAPF2) - RREG_ADDR(dAPF2)), true, true));
+    reverb.r_mRAPF2dAPF2 = static_cast<i16>(read_RAM(reverb_addr(RREG_ADDR(mRAPF2) - RREG_ADDR(dAPF2)), true, true));
+    // READ REVERB   mLAPF2 - dAPF2    mRAPF2 - dAPF2
+    // XXXX REVERB   mLAPF1            mRAPF1          <-- WRITE becomes READ if REVERB DISABLED.
+    // XXXX REVERB   mLAPF2            mRAPF2          <-- WRITE becomes READ if REVERB DISABLED.
+
+    // Lout=Lout-vAPF1*[mLAPF1-dAPF1]
+    s = reverb.proc_l - RVOL(RREG(vAPF1), r_mLAPF1dAPF1);
+    // [mLAPF1]=Lout,
+    s = CLAMP(s, -0x8000, 0x7FFF);
+    WRITE_RREG_ADDR(mLAPF1, s);
+    // Lout=Lout*vAPF1+[mLAPF1-dAPF1]
+    s = RVOL(s, RREG(vAPF1)) + r_mLAPF1dAPF1;
+    reverb.proc_l = s;
+
+    // Rout=Rout-vAPF1*[mRAPF1-dAPF1]
+    s = reverb.proc_r - RVOL(RREG(vAPF1), r_mRAPF1dAPF1);
+
+    // [mRAPF1]=Rout
+    s = CLAMP(s, -0x8000, 0x7FFF);
+    WRITE_RREG_ADDR(mRAPF1, s);
+
+    // Rout=Rout*vAPF1+[mRAPF1-dAPF1]
+    s = RVOL(s, RREG(vAPF1)) + r_mRAPF1dAPF1;
+    reverb.proc_r = s;
+}
+
+void core::apply_all_pass_filter_2() {
+    //___Late Reverb APF2 (All Pass Filter 2, with input from APF1)________________
+    i32 s;
+    // Lout=Lout-vAPF2*[mLAPF2-dAPF2]
+    s = reverb.proc_l - RVOL(RREG(vAPF2), reverb.r_mLAPF2dAPF2);
+    // [mLAPF2]=Lout
+    s = CLAMP(s, -0x8000, 0x7FFF);
+    WRITE_RREG_ADDR(mLAPF2, s);
+    // Lout=Lout*vAPF2+[mLAPF2-dAPF2]
+    s = RVOL(s, RREG(vAPF2)) + reverb.r_mLAPF2dAPF2;
+    reverb.proc_l = s;
+
+    // Rout=Rout-vAPF2*[mRAPF2-dAPF2]
+    s = reverb.proc_r - RVOL(RREG(vAPF2), reverb.r_mRAPF2dAPF2);
+
+    // [mRAPF2]=Rout
+    s = CLAMP(s, -0x8000, 0x7FFF);
+    WRITE_RREG_ADDR(mRAPF2, s);
+
+    // Rout=Rout*vAPF2+[mRAPF2-dAPF2]
+    s = RVOL(s, RREG(vAPF2)) + reverb.r_mRAPF2dAPF2;
+    reverb.proc_r = s;
+}
+
+void core::apply_comb_filter() {
+    // READ REVERB   mLComb2           mRComb2
+    // READ REVERB   mLComb3           mRComb3
+    // READ REVERB   mLComb4           mRComb4
+    i16 r_mLCOMB2 = READ_RREG_ADDR(mLCOMB2);
+    i16 r_mRCOMB2 = READ_RREG_ADDR(mRCOMB2);
+    i16 r_mLCOMB3 = READ_RREG_ADDR(mLCOMB3);
+    i16 r_mRCOMB3 = READ_RREG_ADDR(mRCOMB3);
+    i16 r_mLCOMB4 = READ_RREG_ADDR(mLCOMB4);
+    i16 r_mRCOMB4 = READ_RREG_ADDR(mRCOMB4);
+    /*
+    __Early Echo (Comb Filter, with input from buffer)__________________________
+    Lout=vCOMB1*[mLCOMB1]+vCOMB2*[mLCOMB2]+vCOMB3*[mLCOMB3]+vCOMB4*[mLCOMB4]
+    Rout=vCOMB1*[mRCOMB1]+vCOMB2*[mRCOMB2]+vCOMB3*[mRCOMB3]+vCOMB4*[mRCOMB4]}
+    */
+    //     Lout=vCOMB1*[mLCOMB1]+vCOMB2*[mLCOMB2]+vCOMB3*[mLCOMB3]+vCOMB4*[mLCOMB4]
+    i32 l, r;
+    l = RVOL(RREG(vCOMB1), reverb.r_mLCOMB1);
+    l += RVOL(RREG(vCOMB2), r_mLCOMB2);
+    l += RVOL(RREG(vCOMB3), r_mLCOMB3);
+    l += RVOL(RREG(vCOMB4), r_mLCOMB4);
+    r = RVOL(RREG(vCOMB1), reverb.r_mRCOMB1);
+    r += RVOL(RREG(vCOMB2), r_mRCOMB2);
+    r += RVOL(RREG(vCOMB3), r_mRCOMB3);
+    r += RVOL(RREG(vCOMB4), r_mRCOMB4);
+    l = CLAMP(l, -0x8000, 0x7FFF);
+    r = CLAMP(r, -0x8000, 0x7FFF);
+    reverb.proc_l = l;
+    reverb.proc_r = r;
+}
+
+void core::apply_reflection(i32 l, i32 r) {
+    //[mLSAME] = (Lin + [dLSAME]*vWALL - [mLSAME-2])*vIIR + [mLSAME-2]  ;L-to-L
+    // READ REVERB   dLSame            dRSame
+    i16 r_dLSAME = READ_RREG_ADDR(dLSAME);
+    i16 r_dRSAME = READ_RREG_ADDR(dRSAME);
+    // READ REVERB   mLSame-1          mRSame-1
+    i16 r_mLSAME2 = READ_RREG_ADDR_MINUS2(mLSAME);
+    i16 r_mRSAME2 = READ_RREG_ADDR_MINUS2(mRSAME);
+    // READ REVERB   dRDiff            dLDiff
+    i16 r_dRDIFF = READ_RREG_ADDR(dRDIFF);
+    i16 r_dLDIFF = READ_RREG_ADDR(dLDIFF);
+
+    i32 s = l + RVOL(r_dLSAME, RREG(vWALL)) - r_mLSAME2;
+    s = RVOL(s, RREG(vIIR));
+    s += r_mLSAME2;
+    s = CLAMP(s, -0x8000, 0x7FFF);
+    WRITE_RREG_ADDR(mLSAME, s);
+
+    //[mRSAME] = (Rin + [dRSAME]*vWALL - [mRSAME-2])*vIIR + [mRSAME-2]  ;R-to-R
+    s = r + RVOL(r_dRSAME, RREG(vWALL)) - r_mRSAME2;
+    s= RVOL(s, RREG(vIIR));
+    s += r_mRSAME2;
+    s = CLAMP(s, -0x8000, 0x7FFF);
+    WRITE_RREG_ADDR(mRSAME, s);
+    // XXXX REVERB   mLSame            mRSame          <-- WRITE becomes READ if REVERB DISABLED.
+
+    // READ REVERB   mLDiff-1          mRDiff-1
+    i16 r_mLDIFF2 = READ_RREG_ADDR_MINUS2(mLDIFF);
+    i16 r_mRDIFF2 = READ_RREG_ADDR_MINUS2(mRDIFF);
+    // READ REVERB   mLComb1           mRComb1
+    reverb.r_mLCOMB1 = READ_RREG_ADDR(mLCOMB1);
+    reverb.r_mRCOMB1 = READ_RREG_ADDR(mRCOMB1);
+
+  //[mLDIFF] = (Lin + [dRDIFF]*vWALL - [mLDIFF-2])*vIIR + [mLDIFF-2]  ;R-to-L
+    s = l + RVOL(r_dRDIFF, RREG(vWALL)) - r_mLDIFF2;
+    s = RVOL(s, RREG(vIIR));
+    s += r_mLDIFF2;
+    s = CLAMP(s, -0x8000, 0x7FFF);
+    WRITE_RREG_ADDR(mLDIFF, s);
+
+    //[mRDIFF] = (Rin + [dLDIFF]*vWALL - [mRDIFF-2])*vIIR + [mRDIFF-2]  ;L-to-R
+    s = r + RVOL(r_dLDIFF, RREG(vWALL)) - r_mRDIFF2;
+    s = RVOL(s, RREG(vIIR));
+    s += r_mRDIFF2;
+    s = CLAMP(s, -0x8000, 0x7FFF);
+    WRITE_RREG_ADDR(mRDIFF, s);
+    // XXXX REVERB   mLDiff            mRDiff          <-- WRITE becomes READ if REVERB DISABLED.
+}
+
+void core::cycle() {
+    do_noise();
+    reverb.in_l = 0;
+    reverb.in_r = 0;
+    for (auto & v : voices) {
+        v.cycle(noise.level);
+    }
+    do_capture();
+
+    i32 l = 0;
+    i32 r = 0;
+    for (u32 i = 0; i < 24; i++) {
+        l += voices[i].sample_l;
+        r += voices[i].sample_r;
+        if (io.SPUCNT.reverb_master_enable && voices[i].io.reverb_on) {
+            reverb.in_l += voices[i].sample_l;
+            reverb.in_r += voices[i].sample_r;
+        }
+    }
+    if (io.SPUCNT.master_mute == 0) {
+        l = 0;
+        r = 0;
+        reverb.in_l = 0;
+        reverb.in_r = 0;
+    }
+    if (io.SPUCNT.cd_audio_reverb) {
+        reverb.in_l += capture.sample.cd_l;
+        reverb.in_r += capture.sample.cd_r;
+    }
+    reverb.in_l = CLAMP(reverb.in_l, -0x8000, 0x7FFF);
+    reverb.in_r = CLAMP(reverb.in_r, -0x8000, 0x7FFF);
+    process_reverb();
+
+    l += capture.sample.cd_l;
+    r += capture.sample.cd_r;
+    l += reverb.sample_l;
+    r += reverb.sample_r;
+
+    l = VOL(l, io.vol_L);
+    r = VOL(r, io.vol_R);
+
+    l = CLAMP(l, -0x8000, 0x7FFF);
+    r = CLAMP(r, -0x8000, 0x7FFF);
+
+    // TODO: test DMA IRQs
+    sample_l = static_cast<i16>(l);
+    sample_r = static_cast<i16>(r);
+    if (fout && (bus->clock.master_cycle_count % 44100) == 0) fflush(fout);
+}
+
+void core::write_file_mono(i16 s) {
+    if (fout == nullptr) {
+        fout = fopen("/Users/dave/out.raw", "wb");
+    }
+    fwrite(&s, 2, 1, fout);
+}
+
+void core::write_file_stereo(i16 l, i16 r) {
+    if (fout == nullptr) {
+        fout = fopen("/Users/dave/out.raw", "wb");
+    }
+    fwrite(&l, 2, 1, fout);
+    fwrite(&r, 2, 1, fout);
+}
+
+void core::mainbus_write(u32 addr, u8 sz, u32 val)
+{
+    u32 raddr = addr;
+    //if (raddr != 0x1f801da8) dbg_printf("\n(SPU) Write %08x(%d): %08x", addr, sz, val);
+    if ((sz == 1) && (addr & 1)) {
+        static int a = 1;
+        if (a == 1) {
+            a = 0;
+            printf("\n(SPU) WARN Ignore SPU 8bit write to odd address");
+        }
+        return;
+    }
+    addr &= 0xFFFFFFFE;
+    if (sz == 4) {
+        mainbus_write(addr, 2, val & 0xFFFF);
+        mainbus_write(addr + 2, 2, (val >> 16) & 0xFFFF);
+        return;
+    }
+    if (sz == 1) sz = 2;
+    val &= 0xFFFF;
+
+    if (addr >= 0x1F801C00 && addr <= 0x1F801D7F) {
+        addr -= 0x1F801C00;
+        addr %= 0x180;
+        return voices[addr >> 4].write_reg((addr & 0xF) >> 1, val);
+    }
+
+    if (addr >= 0x1F801DA4 && addr <= 0x1F801DBB) {
+        return write_control_regs(addr, sz, val);
+    }
+    if (addr >= 0x1F801DC0 && addr <= 0x1F801DFF) {
+        return write_reverb_reg(addr, sz, val);
+    }
+
+    if ((addr >= 0x1F801E00) && (addr <= 0x1F801E5F)) {
+        // 00 = l
+        // 02 = r
+        addr -= 0x1F801E00;
+        u32 v = addr >> 2;
+        if (addr & 2) voices[v].io.vol_r.sweep.output = static_cast<i16>(val);
+        else voices[v].io.vol_l.sweep.output = static_cast<i16>(val);
+        return;
+    }
+
+    switch (addr) {
+        case 0x1F801D90:
+            for (u32 i = 1; i < 16; i++) {
+                voices[i].io.PMON = (val >> i) & 1;
+            }
+            io.pmon_lo = val;
+            return;
+        case 0x1F801D92:
+            for (u32 i = 0; i < 8; i++) {
+                voices[i+16].io.PMON = (val >> i) & 1;
+            }
+            io.pmon_hi = val;
+            return;
+        case 0x1F801D80: io.vol_L = val; return;
+        case 0x1F801D82: io.vol_R = val; return;
+        case 0x1F801D88:
+            for (u16 i = 0; i < 16; i++) {
+                if ((val >> i) & 1) voices[i].keyon();
+            }
+            io.keyon_lo = val;
+            return;
+        case 0x1F801D8A:
+            for (u16 i = 0; i < 8; i++) {
+                if ((val >> i) & 1) voices[i+16].keyon();
+            }
+            io.keyon_hi = val;
+            return;
+        case 0x1F801D8C:
+            //printf("\nKEYOFF_LO %08x: %04x", addr, val);
+            for (u16 i = 0; i < 16; i++) {
+                if ((val >> i) & 1) voices[i].keyoff();
+            }
+            io.keyoff_lo = val;
+            return;
+        case 0x1F801D8E:
+            //printf("\nKEYOFF_HI %08x: %04x", addr, val);
+            for (u16 i = 0; i < 8; i++) {
+                if ((val >> i) & 1) voices[i+16].keyoff();
+            }
+            io.keyoff_hi = val;
+            return;
+        case 0x1F801D94:
+            for (u16 i = 0; i < 16; i++) {
+                voices[i].io.noise_enable = (val >> i) & 1;
+            }
+            io.non_lo = val;
+            return;
+        case 0x1F801D96:
+            for (u16 i = 0; i < 8; i++) {
+                voices[i+16].io.noise_enable = (val >> i) & 1;
+            }
+            io.non_hi = val;
+            return;
+        case 0x1F801D98:
+            for (u16 i = 0; i < 16; i++) {
+                voices[i].io.reverb_on = (val >> i) & 1;
+            }
+            io.reverb.on_lo = val;
+            return;
+        case 0x1F801D9A:
+            for (u16 i = 0; i < 8; i++) {
+                voices[i+16].io.reverb_on = (val >> i) & 1;
+            }
+            io.reverb.on_hi = val;
+            return;
+        case 0x1F801D84: io.reverb.vol_out_l = static_cast<i16>(val);
+            return;
+        case 0x1F801D86: io.reverb.vol_out_r = static_cast<i16>(val); return;
+        case 0x1F801DA2: io.reverb.mBASE = val << 3; reverb.buf_len = 0x80000 - io.reverb.mBASE; reverb.buf_addr = 0; return;
+        case 0x1F801D9C: // ENDX ignores writes
+        case 0x1F801D9E: return;
+
+    }
+    printf("\n(SPU) Unhandled write %08x (%d): %08x", raddr, sz, val);
+}
+
+u16 core::read_RAM(u32 addr, bool has_effect, bool triggers_irq) {
+    u16 v = RAM[(addr >> 1) & 0x3FFFF];
+    if (triggers_irq && has_effect) check_irq_addr(addr);
+    return v;
+}
+
+u8 core::read_RAM8(u32 addr, bool has_effect, bool triggers_irq) {
+    u8 v = cR8(RAM, addr);
+    if ((addr & 1) == 0 && triggers_irq && has_effect) check_irq_addr(addr);
+    return v;
+}
+
+
+void core::write_RAM(u32 addr, u16 val, bool triggers_irq) {
+    RAM[(addr >> 1) & 0x3FFFF] = static_cast<i16>(val);
+    if (triggers_irq) check_irq_addr(addr);
+}
+
+void core::check_irq_addr(u32 addr) {
+    if (io.SPUCNT.irq9_enable && addr == io.IRQ_addr && ((io.RAMCNT.mode & 6) != 0)) {
+        io.SPUSTAT.irq9 = 1;
+        update_IRQs();
+    }
+}
+
+void VOICE::keyon() {
+    io.reached_loop_end = 0;
+    env.phase = EP_ATTACK;
+    env.adsr.output = 0;
+    env.load_attack();
+    //adpcm.repeat_addr = adpcm.start_addr;
+    loop_written = false;
+    pitch_counter = 0;
+    adpcm_start();
+}
+
+void VOICE::keyoff() {
+    if (env.phase == EP_OFF || env.phase == EP_RELEASE) return;
+    env.load_release();
+}
+
+void VOICE::reset(PS1::core *ps1, u32 num_in) {
+    num = num_in;
+    bus = ps1;
+    env.num = num_in;
+}
+
+u16 VOICE::read_reg(u32 regnum) {
+    switch (regnum) {
+        case 0: {
+            return io.vol_l.read();
+        }
+        case 1: {
+            return io.vol_r.read();
+        }
+        case 2: return io.sample_rate;
+        case 3: return adpcm.start_addr >> 3;
+            // 4, 5 = 8, A
+        case 4: return io.env_lo;
+        case 5: return io.env_hi;
+        case 6: {
+            return env.adsr.output;
+        }
+
+        case 7: return adpcm.repeat_addr >> 3;
+        default:
+            NOGOHERE;
+    }
+}
+
+void VOICE::write_env_lo(u16 val) {
+    bool changed = io.env_lo != val;
+    io.env_lo = val;
+    if (changed) {
+        env.attack_exponential = (val >> 15) & 1;
+        env.attack_shift = (val >> 10) & 0x1F;
+        env.attack_step = (val >> 8) & 3;
+        env.decay_shift = (val >> 4) & 0xF;
+        env.sustain_level = ((val & 0x0F) + 1) * 0x800;
+        env.reload_phase();
+    }
+}
+
+void VOICE::write_env_hi(u16 val) {
+    bool changed = io.env_hi != val;
+    io.env_hi = val;
+    if (changed) {
+        env.sustain_exponential = (val >> 15) & 1;
+        env.sustain_decreasing = (val >> 14) & 1;
+        env.sustain_shift = (val >> 8) & 0x1F;
+        env.sustain_step = (val >> 6) & 3;
+        env.release_exponential = (val >> 5) & 1;
+        env.release_shift = val & 0x1F;
+        env.reload_phase();
+    }
+}
+
+void VOICE::write_reg(u32 regnum, u16 val) {
+    switch (regnum) {
+        case 0: io.vol_l.write(val); return;
+        case 1: io.vol_r.write(val); return;
+        case 2: io.sample_rate = val & 0x7FFF; return;
+        case 3: {
+                adpcm.start_addr = val << 3;
+            return;
+        }
+        case 4: write_env_lo(val); return;
+        case 5: write_env_hi(val); return;
+        case 6: {
+            env.adsr.output = static_cast<i16>(val); return;
+            // ?? psx-spx says both it works and not
+            return; // WHICH IS IT!?
+        }
+        case 7: {
+            adpcm.repeat_addr = val << 3;
+            loop_written = true;
+            return;
+        }
+        default:
+            NOGOHERE;
+    }
+}
+
+void core::reset() {
+    for (u32 i = 0; i < 24; i++) voices[i].reset(bus, i);
+    memset(RAM, 0, sizeof(RAM));
+}
+
+u32 core::mainbus_read(u32 addr, u8 sz) {
+    u32 v = snooped_mainbus_read(addr, sz);
+    //dbg_printf("\n(SPU) Read %08x(%d): %08x", addr, sz, v);
+    return v;
+
+}
+
+u32 core::snooped_mainbus_read(u32 addr, u8 sz) {
+    u32 raddr = addr;
+    addr &= 0xFFFFFFFE;
+    u32 v;
+    if (sz == 4) {
+        v = mainbus_read(addr, 2);
+        v |= mainbus_read(addr + 2, 2) << 16;
+        return v;
+    }
+    if (sz == 1) sz = 2;
+    if (addr >= 0x1F801C00 && addr <= 0x1F801D7F) {
+        addr -= 0x1F801C00;
+        addr %= 0x180; // 8 16-bit regs per voice
+        return voices[addr >> 4].read_reg((addr & 0xF) >> 1);
+    }
+    if ((addr >= 0x1F801E00) && (addr <= 0x1F801E5F)) {
+        // 00 = l
+        // 02 = r
+        addr -= 0x1F801E00;
+        v = addr >> 2;
+        if (addr & 2) return voices[v].io.vol_r.sweep.output;
+        return voices[v].io.vol_l.sweep.output;
+    }
+    // D84...DFE reverb
+    if (addr >= 0x1F801DA4 && addr <= 0x1F801DBA) {
+        return read_control_regs(addr, sz);
+    }
+    if (addr >= 0x1F801DC0 && addr <= 0x1F801DFF) {
+        return read_reverb_reg(addr, sz);
+    }
+
+    switch (addr) {
+        case 0x1F801D90: return io.pmon_lo;
+        case 0x1F801D92: return io.pmon_hi;
+        case 0x1F801D80:
+            return io.vol_L;
+        case 0x1F801D82:
+            return io.vol_R;
+        case 0x1F801D9C:
+            v = 0;
+            for (u32 i = 0; i < 16; i++) {
+                v |= voices[i].io.reached_loop_end << i;
+            }
+            return v;
+        case 0x1F801D9E:
+            v = 0;
+            for (u32 i = 0; i < 8; i++) {
+                v |= voices[i+16].io.reached_loop_end << i;
+            }
+            return v;
+        case 0x1F801D84: return io.reverb.vol_out_l;
+        case 0x1F801D86: return io.reverb.vol_out_r;
+        case 0x1F801D88: {
+            return io.keyon_lo;
+        }
+        case 0x1F801D8A: return io.keyon_hi;
+        case 0x1F801D8C: return io.keyoff_lo;
+        case 0x1F801D8E: return io.keyoff_hi;
+        case 0x1F801D94: return io.non_lo;
+        case 0x1F801D96: return io.non_hi;
+        case 0x1F801D98: return io.reverb.on_lo;
+        case 0x1F801D9A: return io.reverb.on_hi;
+        case 0x1F801DA2: return io.reverb.mBASE >> 3;
+        case 0x1F801DA0: return 0x9D78;
+        case 0x1F801DBC: return 0x8021;
+        case 0x1F801DBE: return 0x4BDF;
+            // 1F801E60 32 bytes R/W has default value
+    }
+    printf("\n(SPU) Unhandled read %08x (%d)", raddr, sz);
+    return masksz[sz];
+}
+}

@@ -1,0 +1,107 @@
+#pragma once
+
+#include "helpers/int.h"
+#include "helpers/cvec.h"
+#include "helpers/scheduler.h"
+#include "helpers/sys_interface.h"
+
+#include "component/cpu/cdp1802/cdp1802.h"
+#include "component/gpu/cdp1861/cdp1861.h"
+#include "vip_clock.h"
+
+namespace VIP {
+struct core : jsm_system {
+    explicit core(jsm::systems in_kind);
+    CLOCK clock{};
+    jsm::systems kind;
+    CDP1802::core cpu;
+    CDP1861::core pixie{};
+
+    scheduler_t scheduler;
+
+    void do_cycle();
+
+    void write_main_bus(u16 addr, u8 val);
+    u8 read_main_bus(u16 addr, u8 old, bool has_effect);
+
+private:
+    void update_hex_keypad();
+    void trace_format_write();
+    void trace_format_read();
+    i64 cycles_deficit{};
+    void schedule_first();
+    u16 u6b{};
+
+    u8 RAM[0x1000]{};
+    u16 RAM_mask{0x7FF};
+    void service_N_in();
+    void service_N_out();
+
+    // Save-state helpers
+    void serialize_console(serialized_state &state);
+    void serialize_clock(serialized_state &state);
+    void serialize_cpu(serialized_state &state);
+    void serialize_pixie(serialized_state &state);
+    void deserialize_console(serialized_state &state);
+    void deserialize_clock(serialized_state &state);
+    void deserialize_cpu(serialized_state &state);
+    void deserialize_pixie(serialized_state &state);
+
+    struct {
+        cvec_ptr<physical_io_device> pio_ptr{};
+        u32 keys[16]{};
+        u8 latch{};
+    } hex_keypad{};
+
+public:
+    // Everything here down is frontend & debugger stuff
+    struct {
+        u32 described_inputs{};
+    } jsm{};
+
+    DBG_START
+        DBG_CPU_REG_START(cpu)
+                    *R[16], *N, *I, *T, *IE, *P, *X, *D, *DF, *Q
+        DBG_CPU_REG_END(cpu)
+
+        DBG_MEMORY_VIEW
+
+        DBG_EVENT_VIEW
+
+        DBG_IMAGE_VIEWS_START
+            MDBG_IMAGE_VIEW(video)
+        DBG_IMAGE_VIEWS_END
+
+        DBG_WAVEFORM_START1
+            DBG_WAVEFORM_MAIN
+        DBG_WAVEFORM_END1
+        DBG_LOG_VIEW_SIMPLE
+    DBG_END
+
+    struct {
+        double master_cycles_per_audio_sample{},  master_cycles_per_max_sample{};
+        double next_sample_cycle_max{}, next_sample_cycle{};
+        audio_output_ring *output_ring{};
+        u64 cycles{};
+    } audio{};
+
+    void play() final;
+    void pause() final;
+    void stop() final;
+    void get_framevars(framevars& out) final;
+    void reset() final;
+    void killall();
+    u32 finish_frame() final;
+    u32 finish_scanline() final;
+    u32 step_master(u32 howmany) final;
+    //void load_BIOS(multi_file_set& mfs) final;
+    void enable_tracing();
+    void disable_tracing();
+    void describe_io() final;
+    void save_state(serialized_state &state) final;
+    void load_state(serialized_state &state, deserialize_ret &ret) final;
+    void set_audio_ring(audio_output_ring *ring) final;
+    void setup_debugger_interface(debugger_interface &intf) final;
+    void sideload(multi_file_set& mfs) final;
+};
+}

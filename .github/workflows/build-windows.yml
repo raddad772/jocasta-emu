@@ -1,0 +1,31 @@
+# Build on Windows
+name: Build Windows
+
+on: 
+  workflow_dispatch:
+  push:
+    branches: [ main, github-actions ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Checkout submodules
+      run: git submodule update --init --recursive
+
+    - name: Build Windows cross artifacts
+      run: tools/windows/clang-mingw/build-jocasta-gui.sh
+
+    - name: Upload Windows artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: jocasta-gui-windows-clang-mingw
+        path: artifacts/jocasta-gui-windows-clang-mingw-*.zip
+        if-no-files-found: error

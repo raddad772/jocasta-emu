@@ -1,0 +1,282 @@
+//
+// Created by . on 11/29/25.
+//
+
+#include <cstdio>
+
+#include "m6526.h"
+
+namespace M6526 {
+
+u8 chip::read(u8 addr, u8 old, bool has_effect) {
+    addr &= 15;
+    switch(addr) {
+        case 0b0000: return read_PRA();
+        case 0b0001: return read_PRB(has_effect);
+        case 0b0010: return regs.DDRA;
+        case 0b0011: return regs.DDRB;
+        case 0b0100: return timerA.count & 0xFF;
+        case 0b0101: return (timerA.count >> 8) & 0xFF;
+        case 0b0110: return timerB.count & 0xFF;
+        case 0b0111: return (timerB.count >> 8) & 0xFF;
+        case 0b1000: return regs.TOD10;
+        case 0b1001: return regs.TODSEC;
+        case 0b1010: return regs.TODMIN;
+        case 0b1011: return regs.TODHR;
+        case 0b1100: return regs.SDR;
+        case 0b1101: return read_ICR(has_effect);
+        case 0b1110: return regs.CRA.u;
+        case 0b1111: return regs.CRB.u;
+    }
+    return old;
+}
+
+u8 chip::read_PRA() {
+    const u8 out = (pins.PRA_out & regs.DDRA);
+    const u8 in = (pins.PRA_in & ~regs.DDRA);
+    return out | in;
+}
+
+u8 chip::read_PRB(bool has_effect) {
+    const u8 out = (pins.PRB_out & regs.DDRB);
+    const u8 in = (pins.PRB_in & ~regs.DDRB);
+    if (has_effect) {
+        pins.PC = 1;
+        PC_count = 1;
+    }
+    u8 v = out | in;
+    if (regs.CRA.PBON) {
+        v &= 0xBF;
+        v |= timerA.out << 6;
+    }
+    if (regs.CRB.PBON) {
+        v &= 0x7F;
+        v |= timerB.out << 7;
+    }
+    return v;
+}
+
+
+void chip::write(u8 addr, u8 val) {
+    addr &= 15;
+    switch(addr) {
+        case 0b0000: write_PRA(val); return;
+        case 0b0001: write_PRB(val); return;
+        case 0b0010: write_DDRA(val); return;
+        case 0b0011: write_DDRB(val); return;
+        case 0b0100: timerA.latch = (timerA.latch & 0xFF00) | val; return;
+        case 0b0101: timerA.latch = (timerA.latch & 0xFF) | (val << 8); return;
+        case 0b0110: timerB.latch = (timerB.latch & 0xFF00) | val; return;
+        case 0b0111: timerB.latch = (timerB.latch & 0xFF) | (val << 8); return;
+        case 0b1000:
+            if (regs.CRB.ALARM) regs.ALARM10 = val;
+            else regs.TOD10 = val;
+            return;
+        case 0b1001:
+            if (regs.CRB.ALARM) regs.ALARMSEC = val;
+            else regs.TODSEC = val;
+            return;
+        case 0b1010:
+            if (regs.CRB.ALARM) regs.ALARMMIN = val;
+            else regs.TODMIN = val;
+            return;
+        case 0b1011:
+            if (regs.CRB.ALARM) regs.ALARMHR = val;
+            else regs.TODHR = val;
+            return;
+        case 0b1100: write_SDR(val); return;
+        case 0b1101: write_ICR(val); return;
+        case 0b1110: write_CRA(val); return;
+        case 0b1111: write_CRB(val); return;
+    }
+}
+
+void chip::write_CRA(u8 val) {
+    regs.CRA.u = val;
+    if (regs.CRA.LOAD) {
+        timerA.count = timerA.latch;
+    }
+    regs.CRA.LOAD = 0;
+}
+
+void chip::write_CRB(u8 val) {
+    regs.CRB.u = val;
+    if (regs.CRB.LOAD) {
+        timerB.count = timerB.latch;
+    }
+    regs.CRB.LOAD = 0;
+}
+
+u8 chip::read_ICR(bool has_effect) {
+    // read DATA
+    u8 v = regs.ICR_DATA.u;
+    if (has_effect) {
+        regs.ICR_DATA.u = 0;
+        set_IRQ_pin(0);
+    }
+    return v;
+}
+
+void chip::write_SDR(u8 val) {
+    regs.SDR = val;
+    if (regs.serial_data_count == 0 && regs.CRA.SPMODE) {
+        // If there's no data there and we're in input mode, load up the output register
+        regs.serial_data_count = 8;
+        regs.serial_data = val;
+    }
+}
+
+void chip::write_ICR(u8 val) {
+    // write MASK
+    if (!(val & 0x80)) {
+        // if bit7 = 0, clear any written with 1
+        regs.ICR_MASK.u &= ~(val & 0x1F);
+    }
+    else {
+        // if bit7 = 1, set any written with 1
+        regs.ICR_MASK.u |= val & 0x1F;
+    }
+    update_IRQs();
+}
+
+void chip::write_PRA(u8 val) {
+    pins.PRA_out = val;
+}
+
+void chip::write_PRB(u8 val) {
+    pins.PRB_out = val;
+    pins.PC = 1;
+    PC_count = 1;
+}
+
+void chip::write_DDRA(u8 val) {
+    regs.DDRA = val;
+}
+
+void chip::write_DDRB(u8 val) {
+    regs.DDRB = val;
+}
+
+
+void chip::reset() {
+    pins.SP = 1;
+
+}
+
+void chip::tick_A() {
+    if (!timerA.count--) {
+        timerA.count = timerA.latch;
+        u8 old_out= timerA.out;
+        if (regs.CRA.OUTMODE) // toggle mode
+            timerA.out ^= 1;
+        else { // pulse mode
+            timerA.out = 1;
+            timerA.out_count = 1;
+        }
+        if (regs.CRA.SPMODE) {
+            if (regs.serial_data_count) pins.CNT = timerA.out;
+            else pins.CNT = 0;
+            if (!old_out && timerA.out && regs.serial_data_count) {
+                pins.SP = (regs.serial_data & 0x80) >> 7;
+                regs.serial_data <<= 1;
+                regs.serial_data_count--;
+                if (regs.serial_data_count == 0) {
+                    regs.ICR_DATA.SP = 1;
+                    update_IRQs();
+                    if (regs.serial_data_ready) {
+                        regs.serial_data_count = 8;
+                        regs.serial_data = regs.SDR;
+                        regs.serial_data_ready = 0;
+                    }
+                }
+            }
+        }
+        regs.ICR_DATA.TA = 1;
+        update_IRQs();
+        regs.CRA.START = regs.CRA.RUNMODE ^ 1;
+        if (regs.CRB.START && regs.CRB.INMODE > 1) {
+            bool do_tick = regs.CRB.INMODE == 2 ? true : pins.CNT;
+            if (do_tick) tick_B();
+        }
+    }
+}
+
+void chip::tick_B() {
+    if (!timerB.count--) {
+        if (regs.CRB.OUTMODE)
+            timerB.out ^= 1;
+        else {
+            timerB.out = 1;
+            timerB.out_count = 1;
+        }
+        regs.ICR_DATA.TB = 1;
+        update_IRQs();
+        regs.CRB.START = regs.CRB.RUNMODE ^ 1;
+    }
+}
+
+void chip::update_IRQs() {
+    if (regs.ICR_DATA.u & regs.ICR_MASK.u & 0x1F) regs.ICR_DATA.IR = 1;
+    set_IRQ_pin(regs.ICR_DATA.IR);
+}
+
+void chip::set_IRQ_pin(u8 val) {
+    u8 old = pins.IRQ;
+    pins.IRQ = val;
+    if (old != val && update_irq.func) update_irq.func(update_irq.ptr, update_irq.device_num, val);
+}
+
+void chip::cycle() {
+    // update PC pin which pulses for 1 clock
+    pins.PC &= PC_count--;
+
+    // Update FLAG bit
+    if ((old_FLAG != 0) && (pins.FLAG)) {
+        regs.ICR_DATA.FLG = 1;
+        update_IRQs();
+    }
+    old_FLAG = pins.FLAG;
+
+    bool cnt_happened = pins.CNT && !old_CNT;
+    old_CNT = pins.CNT;
+    if (cnt_happened && !regs.CRA.SPMODE) { // clock in a bit to SDR
+        regs.serial_data <<= 1;
+        //regs.serial_data |= pins.SP;
+        regs.serial_data |= 1;
+        regs.serial_data_count++;
+        if (regs.serial_data_count == 8) {
+            regs.serial_data_count = 0;
+            regs.serial_data = 0;
+            regs.SDR = regs.serial_data;
+            regs.ICR_DATA.SP = 1;
+            update_IRQs();
+        }
+    }
+
+    if (regs.CRA.START) {
+        // Determine if clock pulse should happen depending on mode
+        // then do it
+        if (regs.CRA.INMODE ? cnt_happened : true) tick_A();
+    }
+    if (regs.CRB.START) {
+        // Determine if clock pulse should happen depending on mode
+        bool do_tick = false;
+        switch (regs.CRB.INMODE) {
+            case 0: do_tick = true; break;
+            case 1: do_tick = cnt_happened; break;
+            case 2: // covered by tick_A()
+            case 3: // covered by tick_A()
+                break;
+        }
+        if (do_tick) tick_B();
+    }
+
+    if (!regs.CRA.OUTMODE) {
+        timerA.out &= timerA.out_count--;
+    }
+    if (!regs.CRB.OUTMODE) {
+        timerB.out &= timerB.out_count--;
+    }
+}
+
+}

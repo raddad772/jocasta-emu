@@ -1,0 +1,140 @@
+//
+// Created by . on 11/18/25.
+//
+
+#pragma once
+
+#include "helpers/int.h"
+#include "helpers/debug.h"
+#include "helpers/debugger/debuggerdefs.h"
+#include "helpers/debugger/debugger.h"
+#include "helpers/serialize/serialize.h"
+
+/*
+ *In order for IO/DMA to work properly, you need to do
+ *
+ * CDP1802_cycle()
+ * check_and_service_reads()
+ * devices here
+ * check_and_service_writes()
+*/
+
+namespace CDP1802 {
+
+struct PINS {
+    enum SC {
+        S0_fetch=0,
+        S1_execute=1,
+        S2_dma=2,
+        S3_interrupt=3
+    }SC{}; //
+    enum clear_wait {
+        LOAD = 0,
+        RESET = 1,
+        PAUSE = 2,
+        RUN = 3
+    } clear_wait{};
+
+    u8 EF{}; // EF lines
+
+    u8 INTERRUPT{};
+    u8 DMA_IN{};
+    u8 DMA_OUT{}; // priority: DMA in, DMA out, interrupt
+
+    u8 MRD{}, MWR{}; // Memory read and write
+
+    u8 Q{};
+    u16 Addr{}; // Memory Address lines
+    u8 D{}; // Data lines
+    u8 N{}; // IO device line selector
+};
+
+struct REGS {
+    union {
+        struct {
+            u8 lo, hi;
+        };
+        u16 u{0};
+    } R[16];
+
+    u8 N{}; // holds low 4 bits of instruction
+    u8 I{}; // holds high 4 bits of instruction
+    union {
+        struct {
+            u8 lo : 4;
+            u8 hi : 4;
+        };
+        u8 u{};
+    } T{};// high nibble = X, low = P after interrupt
+    u8 IE{};
+    u8 P{}; // program counter designator
+    u8 X{}; // operand pointer designator
+
+    u8 D{};
+
+    u8 IR{}; // holds current instruction opcode
+    u8 B{};
+    u8 DF{}; // ALU carry
+};
+
+struct core;
+typedef void (*ins_func)(core*);
+
+struct core {
+    explicit core(u64 *master_clk) : master_clock(master_clk) {}
+    PINS pins{};
+    REGS regs{};
+
+    void cycle();
+    void reset();
+
+    ins_func ins{};
+    void prepare_fetch();
+    i32 execs_left{};
+    u64 *master_clock;
+    bool perform_interrupts();
+
+    DBG_START
+        DBG_TRACE_VIEW
+    DBG_END
+    struct {
+        u32 ok{};
+        u64 *cycles{};
+        u64 my_cycles{};
+        jsm_string str{1000}, str2{200};
+        jsm_debug_read_trace strct{};
+        u16 ins_PC;
+        struct {
+            dbglog_view *view{};
+            u32 id{};
+        } dbglog{};
+    } trace{};
+
+    void setup_tracing(jsm_debug_read_trace *strct, u64 *trace_cycle_pointer);
+    u16 most_recent_fetch{};
+    void pprint_context(jsm_string &out);
+
+    void serialize(serialized_state &state);
+    void deserialize(serialized_state &state);
+
+private:
+    void fetch();
+    void execute();
+    void dma_in();
+    void dma_out();
+    void interrupt();
+    void do_out();
+    void dma_end();
+    void interrupt_end();
+    void trace_format();
+
+    void prepare_execute();
+    void prepare_execute_70();
+    void prepare_execute_F0();
+
+    void do_load(u8 addr_ptr);
+    void do_store(u8 addr_ptr, u8 val);
+    void do_immediate();
+};
+
+}

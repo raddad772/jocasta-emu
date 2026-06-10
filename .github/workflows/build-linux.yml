@@ -1,0 +1,31 @@
+# Build on Linux
+name: Build Linux
+
+on: 
+  workflow_dispatch:
+  push:
+    branches: [ main, github-actions ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Checkout submodules
+      run: git submodule update --init --recursive
+
+    - name: Build Linux x64 artifacts
+      run: tools/linux/x64/build-jocasta-gui.sh
+
+    - name: Upload Linux x64 artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: jocasta-gui-linux-x64
+        path: artifacts/jocasta-gui-linux-x64-*.tar.gz
+        if-no-files-found: error

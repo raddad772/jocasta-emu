@@ -1,0 +1,255 @@
+//
+// Created by Dave on 2/4/2024.
+//
+
+#include <cstdio>
+
+#include "m6502.h"
+#include "m6502_disassembler.h"
+#include "helpers/debug.h"
+#include "helpers/serialize/serialize.h"
+
+namespace M6502 {
+enum OP {
+    RESET = 0x100,
+    NMI = 0x101,
+    IRQ = 0x102
+};
+
+void M6502_P::setbyte(u8 val) {
+    u = val | 0x20;
+}
+
+u8 M6502_P::getbyte() {
+    return u | 0x20;
+}
+
+core::core(ins_func *opcode_table) : opcode_table(opcode_table) {
+    current_instruction = opcode_table[0];
+    trace.cycles = &trace.my_cycles;
+
+    dbg.events.IRQ = -1;
+    dbg.events.NMI = -1;
+}
+
+void core::power_on()
+{
+    // Initial values from Visual6502
+    regs.A = 0xCC;
+    regs.S = 0xFD;
+    pins.D = 0x60;
+    pins.RW = 0;
+    pins.RDY = 0;
+    regs.X = regs.Y = 0;
+    regs.P.I = 1;
+    regs.P.Z = 1;
+    regs.PC = 0;
+}
+
+void core::reset() {
+    pins.RST = 0;
+    regs.TCU = 0;
+    pins.RDY = 0;
+    regs.P.B = 1;
+    regs.P.D = 0;
+    regs.P.I = 1;
+    regs.WAI = 0;
+    regs.STP = 0;
+    if (first_reset) power_on();
+    first_reset = 0;
+    pins.RW = 0;
+    regs.TCU = 1;
+    pins.RW = 0;
+    pins.Addr = regs.S | 0x100;
+    regs.S = (regs.S - 1) & 0xFF;
+    current_instruction = opcode_table[OP::RESET];
+}
+
+void core::setup_tracing(jsm_debug_read_trace *strct, u64 *trace_cycle_pointer)
+{
+    jsm_copy_read_trace(&trace.strct, strct);
+    trace.ok = 1;
+    trace.cycles = trace_cycle_pointer;
+}
+
+void core::cycle()
+{
+    // Perform 1 processor cycle
+    if (regs.HLT || regs.STP) return;
+    if ((!pins.RW) && pins.RDY) return; // If we're on a read cycle and RDY is high, don't do anything
+
+    // Edge-sensitive 0->1
+    if (pins.NMI != regs.NMI_old) {
+        if (pins.NMI == 1) regs.NMI_level_detected = 1;
+        regs.NMI_old = pins.NMI;
+    }
+
+    regs.TCU++;
+    if (regs.TCU == 1) { // T0, instruction decode
+        trace.ins_PC = pins.Addr; // Capture PC before it runs away
+        trace_format();
+        regs.IR = pins.D;
+        if (regs.do_NMI) {
+            regs.do_NMI = false;
+            regs.IR = OP::NMI;
+            DBG_EVENT(dbg.events.NMI);
+            if (::dbg.brk_on_NMIRQ) {
+                dbg_break("M6502 NMI", *trace.cycles);
+            }
+        } else if (regs.do_IRQ) {
+            regs.do_IRQ = false;
+            regs.IR = OP::IRQ;
+            DBG_EVENT(dbg.events.IRQ);
+            if (::dbg.brk_on_NMIRQ) {
+                dbg_break("M6502 IRQ", *trace.cycles);
+            }
+        }
+        current_instruction = opcode_table[regs.IR];
+        if (current_instruction == opcode_table[2]) { // TODO: this doesn't work with illegal opcodes or m65c02
+            printf("\nINVALID OPCDE %02x", regs.IR);
+        }
+    }
+
+    current_instruction(regs, pins);
+    trace.my_cycles++;
+}
+
+void core::force_jump(u16 addr) {
+    regs.PC = addr;
+    regs.TCU = 0;
+    pins.RW = 0;
+    pins.Addr = regs.PC;
+    regs.PC = (regs.PC + 1) & 0xFFFF;
+}
+
+void poll_NMI_only(REGS &regs, PINS &pins)
+{
+    if (pins.RDY) return;
+    if (regs.NMI_level_detected) {
+        regs.do_NMI = 1;
+        regs.NMI_level_detected = 0;
+    }
+}
+
+// Poll during second-to-last cycle
+void poll_IRQs(REGS &regs, PINS &pins)
+{
+    if (pins.RDY) return;
+    if (regs.NMI_level_detected) {
+        regs.do_NMI = 1;
+        regs.NMI_level_detected = 0;
+    }
+
+    regs.do_IRQ = pins.IRQ && !regs.P.I;
+}
+
+#define S(x) Sadd(state, & x, sizeof( x))
+void REGS::serialize(serialized_state &state) {
+    S(A);
+    S(X);
+    S(Y);
+    S(PC);
+    S(S);
+    S(P.u);
+    S(TCU);
+    S(IR);
+    S(TA);
+    S(TR);
+    S(HLT);
+    S(do_IRQ);
+    S(WAI);
+    S(STP);
+    S(NMI_old);
+    S(NMI_level_detected);
+    S(do_NMI);
+}
+
+void PINS::serialize(serialized_state &state) {
+    S(Addr);
+    S(D);
+    S(RW);
+    S(IRQ);
+    S(NMI);
+    S(RST);
+    S(RDY);
+}
+
+void core::serialize(serialized_state &state)
+{
+    regs.serialize(state);
+    pins.serialize(state);
+    S(trace.ins_PC);
+    S(first_reset);
+}
+#undef S
+
+#define L(x) Sload(state, & x, sizeof( x))
+
+void REGS::deserialize(serialized_state &state) {
+    L(A);
+    L(X);
+    L(Y);
+    L(PC);
+    L(S);
+    L(P.u);
+    L(TCU);
+    L(IR);
+    L(TA);
+    L(TR);
+    L(HLT);
+    L(do_IRQ);
+    L(WAI);
+    L(STP);
+    L(NMI_old);
+    L(NMI_level_detected);
+    L(do_NMI);
+}
+
+void core::pprint_context(jsm_string &out) {
+    out.sprintf("A:%02x  X:%02x  Y:%02x  S:%02x  P:%c%c%c%c%c-%c%c  PC:%04x",
+        regs.A, regs.X, regs.Y, regs.S,
+        regs.P.C ? 'C' : 'c', regs.P.Z ? 'Z' : 'z',
+        regs.P.I ? 'I' : 'i', regs.P.D ? 'D' : 'd',
+        regs.P.B ? 'B' : 'b', regs.P.V ? 'V' : 'v',
+        regs.P.N ? 'N' : 'n',
+        regs.PC);
+}
+
+void core::trace_format() {
+    if (trace.dbglog.view && trace.dbglog.view->ids_enabled[trace.dbglog.id]) {
+        // addr, regs, e, m, x, rt, out
+        trace.str.quickempty();
+        trace.str2.quickempty();
+        u64 tc = *trace.cycles;
+        dbglog_view *dv = trace.dbglog.view;
+
+        u32 PC = trace.ins_PC;
+        disassemble(&PC, trace.strct, trace.str);
+        pprint_context(trace.str2);
+
+        dv->add_printf(trace.dbglog.id, tc, DBGLS_TRACE, "%04x  %s", trace.ins_PC, trace.str.ptr);
+        dv->extra_printf("%s", trace.str2.ptr);
+    }
+}
+
+void PINS::deserialize(serialized_state &state) {
+    L(Addr);
+    L(D);
+    L(RW);
+    L(IRQ);
+    L(NMI);
+    L(RST);
+    L(RDY);
+}
+
+void core::deserialize(serialized_state &state)
+{
+    regs.deserialize(state);
+    pins.deserialize(state);
+    L(trace.ins_PC);
+    L(first_reset);
+    current_instruction = opcode_table[regs.IR];
+}
+
+}
+

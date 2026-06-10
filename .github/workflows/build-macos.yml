@@ -1,0 +1,69 @@
+# Build on macOS
+name: Build macOS
+
+on: 
+  workflow_dispatch:
+  push:
+    branches: [ main, github-actions ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-13
+
+    steps:
+    
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Checkout submodules
+      run: git submodule update --init --recursive
+
+    - name: Install dependencies
+      run: brew install cmake ninja sdl3
+
+    - name: Build macOS x64 artifacts
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        sdl_prefix=$(brew --prefix sdl3)
+        mkdir -p artifacts
+
+        for preset in macos-debug macos-release; do
+          config=${preset#macos-}
+          build_dir="cmake-build-${preset}"
+          app_dir="${build_dir}/jocasta-gui"
+          package_dir="${app_dir}/package"
+          artifact="${GITHUB_WORKSPACE}/artifacts/jocasta-gui-macos-x64-${config}.tar.gz"
+
+          cmake --preset "${preset}" \
+            -DJOCASTA_LOCAL_LIBS_DIR="${sdl_prefix}" \
+            -DJOCASTA_SDL3_LIBRARY="${sdl_prefix}/lib/libSDL3.dylib"
+          cmake --build "${build_dir}" --target jocasta-gui
+
+          rm -rf "${package_dir}"
+          mkdir -p "${package_dir}"
+          cp -f "${app_dir}/jocasta-gui" "${package_dir}/"
+          cp -f -L "${sdl_prefix}/lib/libSDL3.0.dylib" "${package_dir}/"
+
+          while IFS= read -r dep; do
+            case "${dep}" in
+              *libSDL3*.dylib)
+                install_name_tool -change "${dep}" "@executable_path/libSDL3.0.dylib" "${package_dir}/jocasta-gui"
+                ;;
+            esac
+          done < <(otool -L "${package_dir}/jocasta-gui" | awk 'NR > 1 {print $1}')
+
+          file "${package_dir}/jocasta-gui"
+          otool -L "${package_dir}/jocasta-gui"
+          (cd "${package_dir}" && cmake -E tar czf "${artifact}" --format=gnutar -- jocasta-gui libSDL3.0.dylib)
+        done
+
+    - name: Upload macOS x64 artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: jocasta-gui-macos-x64
+        path: artifacts/jocasta-gui-macos-x64-*.tar.gz
+        if-no-files-found: error
